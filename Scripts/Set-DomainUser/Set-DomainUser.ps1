@@ -38,8 +38,7 @@ Skip running the PSMConfigureAppLocker.ps1 script to speed up execution if step 
 .PARAMETER LocalConfigurationOnly
 Do not onboard accounts in Privilege Cloud. Use on subsequent servers after first run.
 #>
-
-
+Import-Module 
 
 [CmdletBinding()]
 param(
