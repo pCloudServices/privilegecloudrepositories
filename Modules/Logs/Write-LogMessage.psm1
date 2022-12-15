@@ -103,3 +103,5 @@ Function Write-LogMessage {
         Throw $(New-Object System.Exception ("Cannot write message"), $_.Exception)
     }
 }
+
+Export-ModuleMember -Function Write-LogMessage
