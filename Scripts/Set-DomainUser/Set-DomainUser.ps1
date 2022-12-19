@@ -756,7 +756,7 @@ Function Add-AdminUserTSShadowPermission {
     }
 }
 
-Function Duplicate-Platform {
+Function Copy-Platform {
     <#
     .SYNOPSIS
     Duplicating the windows domain user platform so we can onboard the accounts into that platform
@@ -877,7 +877,7 @@ Function Get-SafeStatus {
     }
 }
 
-Function Activate-Platform {
+Function Set-ActivePlatform {
     <#
     .SYNOPSIS
     Activate the required platform
@@ -909,7 +909,7 @@ Function Activate-Platform {
     }
 }
 
-Function Create-PSMSafe {
+Function New-PSMSafe {
     <#
     .SYNOPSIS
     Creates a new PSM Safe with correct permissions
@@ -1138,7 +1138,7 @@ Function New-SafePermissions {
     }
 }
 
-Function Check-UM {
+Function Test-UM {
     <#
     .SYNOPSIS
     Checks to see if tenant is UM or not (from the connector server)
@@ -1231,7 +1231,7 @@ $PsmService = Get-Service | Where-Object Name -in $PsmServiceNames
 $REGKEY_PSMSERVICE = $PsmService.Name
 $psmRootInstallLocation = ($(Get-ServiceInstallPath $REGKEY_PSMSERVICE)).Replace("CAPSM.exe", "").Replace('"', "").Trim()
 
-If (Check-UM -psmRootInstallLocation $psmRootInstallLocation) {
+If (Test-UM -psmRootInstallLocation $psmRootInstallLocation) {
     $UM = $true
 }
 else {
@@ -1394,7 +1394,7 @@ If ($LocalConfigurationOnly -ne $true) {
         # function returns false if platform does not exist
         # Creating Platform
         Write-LogMessage -Type Verbose -MSG "Creating new platform"
-        Duplicate-Platform -pvwaAddress $pvwaAddress -pvwaToken $pvwaToken -CurrentPlatformId "7" -NewPlatformName $PlatformName -NewPlatformDescription "Platform for PSM accounts"
+        Copy-Platform -pvwaAddress $pvwaAddress -pvwaToken $pvwaToken -CurrentPlatformId "7" -NewPlatformName $PlatformName -NewPlatformDescription "Platform for PSM accounts"
         $Tasks += ("Set appropriate policies and settings on platform `"{0}`"" -f $PlatformName)
         # Get platform info again so we can ensure it's activated
         $platformStatus = Get-PlatformStatus -pvwaAddress $pvwaAddress -pvwaToken $pvwaToken -PlatformId $PlatformName
@@ -1405,14 +1405,14 @@ If ($LocalConfigurationOnly -ne $true) {
     }
     if ($platformStatus.Active -eq $false) {
         Write-LogMessage -Type Verbose -MSG "Platform is deactivated. Activating."
-        Activate-Platform -pvwaAddress $pvwaAddress -pvwaToken $pvwaToken -Platform $platformStatus.Id
+        Set-ActivePlatform -pvwaAddress $pvwaAddress -pvwaToken $pvwaToken -Platform $platformStatus.Id
     }
     Write-LogMessage -Type Verbose -MSG "Checking current safe status"
     $safeStatus = Get-SafeStatus -pvwaAddress $pvwaAddress -pvwaToken $pvwaToken -SafeName $Safe
     if ($safeStatus -eq $false) {
         # function returns false if safe does not exist
         Write-LogMessage -Type Verbose -MSG "Safe $Safe does not exist. Creating the safe now"
-        $CreateSafeResult = Create-PSMSafe -pvwaAddress $pvwaAddress -pvwaToken $pvwaToken -safe $Safe
+        $CreateSafeResult = New-PSMSafe -pvwaAddress $pvwaAddress -pvwaToken $pvwaToken -safe $Safe
         If ($CreateSafeResult) {
             Write-LogMessage -type Verbose "Successfully created safe $safe"
         }
