@@ -697,8 +697,18 @@ Function Test-PSMWebAppSupport {
 # Script start
 
 $global:InVerbose = $PSBoundParameters.Verbose.IsPresent
+
+#Set File Locations
 $ScriptLocation = Split-Path -Parent $MyInvocation.MyCommand.Path
-$global:LOG_FILE_PATH = "$ScriptLocation\_Add-PSMApplication.log"
+$ScriptsRepository = Split-Path $ScriptLocation
+$ToolRepository = Split-Path $ScriptsRepository
+
+#Import Moudles
+Import-Module "$ToolRepository\Modules\Authentication\*.psm1"
+Import-Module "$ToolRepository\Modules\Logs\*.psm1"
+
+#Logs folder
+$global:LOG_FILE_PATH = "$ToolRepository\logs\_Set-DomainUser.log"
 $global:HTML5 = $HTML5
 
 $CurrentDirectory = (Get-Location).Path

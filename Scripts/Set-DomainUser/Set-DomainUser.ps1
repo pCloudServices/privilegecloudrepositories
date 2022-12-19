@@ -1197,8 +1197,18 @@ function Test-PasswordCharactersValid {
 #Running Set-DomainUser script
 
 $global:InVerbose = $PSBoundParameters.Verbose.IsPresent
+
+#Set File Locations
 $ScriptLocation = Split-Path -Parent $MyInvocation.MyCommand.Path
-$global:LOG_FILE_PATH = "$ScriptLocation\_Set-DomainUser.log"
+$ScriptsRepository = Split-Path $ScriptLocation
+$ToolRepository = Split-Path $ScriptsRepository
+
+#Import Moudles
+Import-Module "$ToolRepository\Modules\Authentication\*.psm1"
+Import-Module "$ToolRepository\Modules\Logs\*.psm1"
+
+#Logs folder
+$global:LOG_FILE_PATH = "$ToolRepository\logs\_Set-DomainUser.log"
 
 if ($null -eq $psmConnectCredentials) {
     $psmConnectCredentials = Get-Credential -Message "Please enter PSMConnect domain user credentials"
