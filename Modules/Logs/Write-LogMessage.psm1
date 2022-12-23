@@ -104,4 +104,38 @@ Function Write-LogMessage {
     }
 }
 
-Export-ModuleMember -Function Write-LogMessage
+# @FUNCTION@ ======================================================================================================================
+# Name...........: Join-ExceptionMessage
+# Description....: Formats exception messages
+# Parameters.....: Exception
+# Return Values..: Formatted String of Exception messages
+# =================================================================================================================================
+Function Join-ExceptionMessage
+{
+<#
+.SYNOPSIS
+	Formats exception messages
+.DESCRIPTION
+	Formats exception messages
+.PARAMETER Exception
+	The Exception object to format
+#>
+	param(
+		[Exception]$e
+	)
+
+	Begin {
+	}
+	Process {
+		$msg = "Source:{0}; Message: {1}" -f $e.Source, $e.Message
+		while ($e.InnerException) {
+		  $e = $e.InnerException
+		  $msg += "`n`t->Source:{0}; Message: {1}" -f $e.Source, $e.Message
+		}
+		return $msg
+	}
+	End {
+	}
+}
+
+Export-ModuleMember -Function Write-LogMessage, Join-ExceptionMessage
