@@ -1,55 +1,27 @@
-# Modules
-$moduleFileNames = @(
-"Authenticate-Platform.psm1",
-"Collect-ExceptionMessage.psm1",
-"DetermineTenantTypeURLs.psm1",
-"Get-Choice.psm1",
-"Get-IdentityURL.psm1",
-"Get-UserFile.psm1",
-"IdentityAuth.psm1",
-"IdentityFunctions.psm1"
-"IgnoreCertErrors.psm1",
-"privilegecloudAuth.psm1",
-"pvwaFunctions.psm1"
-"Write-LogMessage.psm1"
+# Check if running user has sufficient permissions
+Function Get-IdentityPermissions{
+[CmdletBinding()]
+[OutputType([String])]
+Param
+(
+[string]$URLAPI,
+[HashTable]$logonHeader
 )
-foreach ($moduleFile in $moduleFileNames){
-
-    #Write-Host "Importing $moduleFile" -ForegroundColor Gray
-    $modulePaths = @(
-    "..\\PS-Modules\\$moduleFile",
-    "..\\..\\PS-Modules\\$moduleFile",
-    ".\\PS-Modules\\$moduleFile", 
-    ".\\$moduleFile"
-    "..\\$moduleFile"
-    ".\\..\\$moduleFile"
-    "..\\..\\$moduleFile"
-    )
-
-    foreach ($modulePath in $modulePaths) {
-        # Only attempt import if path is found
-        if (Test-Path $modulePath) {
-            try {
-                Import-Module $modulePath -ErrorAction Stop -DisableNameChecking -Force
-            } catch {
-                Write-Host "Failed to import module from $modulePath. Error: $_"
-                Pause
-                Exit
-            }
-         }
+    Try
+    {
+        $resp = Invoke-RestMethod -Uri "$URLAPI/UserMgmt/GetUsersRolesAndAdministrativeRights" -Method Post -ContentType "application/json" -Headers $logonHeader -ErrorVariable identityErr
     }
-
-    if (-not (Get-Module -Name $($moduleFile).Split(".")[0] -ErrorAction Stop)) {
-        Write-Host "Can't find Module $($moduleFile) to import, check that you copied the PS-Modules folder correctly."
-        Pause
-        Exit
+    Catch
+    {
+        Write-LogMessage -Type Error -Msg "Error: $(Collect-ExceptionMessage $_.exception.message $($_.ErrorDetails.Message) $($_.exception.status) $($_.exception.Response.ResponseUri.AbsoluteUri) $identityErr)"
     }
+    Return $resp.Result.Results.row.AdministrativeRights.Description
 }
 # SIG # Begin signature block
 # MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDppC/47sWXhgVr
-# 5em9IisOP0lW8zYWUQ7oLoLVtmqUlaCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBox3jyiLkx6C7D
+# iZDuPKgQ7hVqpN/5nPwKmLiM+w+I1qCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -184,22 +156,22 @@ foreach ($moduleFile in $moduleFileNames){
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIO5fWYIXxHSmOQOnBsQpztQLtFW4yZlvH0r2UJh9c1ihMA0GCSqGSIb3
-# DQEBAQUABIICAApybChFiZVImdf3B/keKoHjY3SPlA0KO325qhCQwVxRTwA25jXW
-# WsUKTpd5SjUcaWtaWUFrfcJWPGfJb/Kaj+8ZTEjExkhx5KXM17d4CbuG5/DHgRGl
-# ET0yQTwo/HYyoZUk6s5zm7vLlqdeult9WUBkholZUkwnu3sGJ+6LqXPbR0aYZR85
-# 9LY9SN+a0MOh90U8NLkSEIehjd+1QOJuUlNQJCTct+A0F6s4m+3VYAYq+Uetb6S6
-# +eEevAVlA9NELJEImzUs3IcevVcfRg/YZywYzuuFhU+GCVEizLiYYROrUufHk/Aq
-# 8CSfS4+rsfhEFuBnCQnd+SMq8cDolEDRIFIhRZ30nMCSTclmHq9kCU0tdYTOP9fE
-# PHWQ24E8OpRB6352E0SZVoKyjexVOHMopbV3xio+fP9zrxR1TeDcaIxXyNPYF7cT
-# dxLDrRCnj1koOA9dKmbKacIwjmg5XP88wOWAar7jkP8Cxjr8CM0T3ZtmMCM8WKwD
-# YggRXDZRXIqQPCtDAq56e40pIJwE+yq5X+TdG/b4dVnVmc+bu4/jcl0V8KpYMMl3
-# IS24/hORm6YM3CL+Mq94fKYg+Fqfaj/EermqYKApVfzrCJRvOOgi+1YlR0A4PBk2
-# akZ1I+yqXif6A3W4tnJa1BZ7rRIWuTPeNF70eWpVQotzxnDtYmdpxsGxoYIOLDCC
+# AQkEMSIEIEqAlJO2vPRtYD5uPTQ20O2MGHTx32cp7t3w/2NKTGWkMA0GCSqGSIb3
+# DQEBAQUABIICAHQOcUBVc3NGWGD5vWesGFq+8jsU6MBNztL1WWIT25oL7LQaJ884
+# UP8JnhcneAr1psitImtoZHfztpTHdc5yhlYg+/KQj/axQcNEbfJiAtNTQvsoBFyd
+# LWxfqwSDtvVYWEcYmq+SUOPD9OAOhj8P+o10rVO8GPdpvPetjC98sb7xNssppYk+
+# ZTOkKZ18+iJ1KXjk/Rf9kcTACR7sev6nruMmV5mWkkqJFktCOVzyO85OYct2sjAA
+# IRu4zStco28tYeXXZVCYjMxkRtV1al18XUqPZPCORiWmuJgaaM0t1lXtrChnO0UV
+# MQjOCgzYt43uSgRketReoL3ilNgbvf+vof9R2SJeMWIVuJRjp7YUTEBVYjWQD4fo
+# CmSfg6LtTunEou1OxLIxZkVtv+pJREtuQ4qiulyQ39001b/6cnzZbEjXX02vCvq0
+# 363/9Pl7uC2ok01Xn0Eif4EEyUh1x84UY6waRbcjHuZgYatQ1N4qF9NiXo+bm32I
+# f6HPeA5sCM5GEHGiiWSqN61AiEMNTv4kBo10GA+chSUz/piZBHgwsvIk8vmtoxVK
+# VYNKERwaaufgqpIMnqjiDe2ECR+GXepQVsDQG3RQ7g6F4dHiAjaZc4YaU6ixrtif
+# VQkAxr7EbsM1vrwp9LVam1wPMDN/wLM7VHlz5BmOu68BOih0hFwTElxkoYIOLDCC
 # DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
 # BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFJ/XQaM3LAGSQsYfxuQW69SNitV4AhUAsrk+ldyh
-# G17LFVnCnRxf5FCIGgMYDzIwMjQwMjAxMDcwNzIwWjADAgEeoIGGpIGDMIGAMQsw
+# AQcXAzAhMAkGBSsOAwIaBQAEFJ/NfwePb/fvRqKIvpM9oU1EXt3KAhUAnah0U+4w
+# 9jp3gMv5W9fYRt+FjlAYDzIwMjQwMjAxMDcwNzI2WjADAgEeoIGGpIGDMIGAMQsw
 # CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
 # BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
 # QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
@@ -263,13 +235,13 @@ foreach ($moduleFile in $moduleFileNames){
 # cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
 # BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
 # BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjAxMDcwNzIwWjAvBgkqhkiG9w0BCQQxIgQg
-# vj2uPe3SR9oJp/16/+qUmGKo7jEXRi3RFdlDqAz+J1EwNwYLKoZIhvcNAQkQAi8x
+# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjAxMDcwNzI2WjAvBgkqhkiG9w0BCQQxIgQg
+# 6XZ1faqrQYfXQoVf+rt9JBvu5aalkOsM8hAFKEctG9MwNwYLKoZIhvcNAQkQAi8x
 # KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAFqotIzJdWpoDhScnQjJr9jQJNOgFtxmsp9QCdWqrk2KpvFqmaqx
-# 0jInNDdBYsqXYL1iRemO+ggOK5paZyV9D2mwuBLFaboWWm/qiJUq7LTe7kAwB4KC
-# Bbtiw/yot6KmlTZLlA6UgAGr4K22G1K/UluVoHyY2M42NUQEuWdQSAywEof7I7gs
-# Z4S9veD4kIToKszmCLoYgQOdPG1XMuXx1p8F38Bq+nWLwnmYg+uq6k3SnVujMA42
-# lNFV6N9unKYQxa+F8ih2qVW7ZnOHVgbV7DEeoyauSb+EHCkBLBlG4U0XBd1o4N1+
-# DLuo3VBLNkkkX+UHCBOJ3nbsWrAYp/ETQ6g=
+# hvcNAQEBBIIBAEtgiXHR9g62v2vAB2ItiPKJBQdBsJBSku8+rVTLYdrve//VoNog
+# T082ZCKGRzicgbYqR3c77AX5Ixjxf6S5rimwqfQBQfvm/CcEAVUKFIuO6qEdaEwa
+# cJLKkKzMpnOlkkTUxa8HXf/mo+QtiVDPVU0a6O5NqKnqqd+NWs6JtbkIGcVl3+E7
+# bAdOFyd/OUvoXEwIbbf+LHOWGmlZuILJZ0BDG9srzMfNwR1h9kSm3YDNWNdwffL8
+# Mbf4fcEqKWZeN4Lz8l81sAq9/QNYnz0dRBauArl1Cc69yL6m3dQ2HpFJ0HskyEsl
+# AzxJ52FMmNzQrR9XnoGT8L5wRV9du83/Sso=
 # SIG # End signature block

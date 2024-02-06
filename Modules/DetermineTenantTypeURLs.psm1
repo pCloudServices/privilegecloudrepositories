@@ -1,55 +1,89 @@
-# Modules
-$moduleFileNames = @(
-"Authenticate-Platform.psm1",
-"Collect-ExceptionMessage.psm1",
-"DetermineTenantTypeURLs.psm1",
-"Get-Choice.psm1",
-"Get-IdentityURL.psm1",
-"Get-UserFile.psm1",
-"IdentityAuth.psm1",
-"IdentityFunctions.psm1"
-"IgnoreCertErrors.psm1",
-"privilegecloudAuth.psm1",
-"pvwaFunctions.psm1"
-"Write-LogMessage.psm1"
-)
-foreach ($moduleFile in $moduleFileNames){
-
-    #Write-Host "Importing $moduleFile" -ForegroundColor Gray
-    $modulePaths = @(
-    "..\\PS-Modules\\$moduleFile",
-    "..\\..\\PS-Modules\\$moduleFile",
-    ".\\PS-Modules\\$moduleFile", 
-    ".\\$moduleFile"
-    "..\\$moduleFile"
-    ".\\..\\$moduleFile"
-    "..\\..\\$moduleFile"
+﻿Function Set-PVWAURLs {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$pvwaURL
     )
 
-    foreach ($modulePath in $modulePaths) {
-        # Only attempt import if path is found
-        if (Test-Path $modulePath) {
-            try {
-                Import-Module $modulePath -ErrorAction Stop -DisableNameChecking -Force
-            } catch {
-                Write-Host "Failed to import module from $modulePath. Error: $_"
-                Pause
-                Exit
-            }
-         }
-    }
+    # Build PVWA Urls
+    $URL_PVWAAPI = "$pvwaURL/PasswordVault/api" # API
+    $URL_Logon = "$URL_PVWAAPI/Auth/CyberArk/Logon" # Logon
+    $URL_Logoff = "$URL_PVWAAPI/Auth/Logoff" # Logoff
 
-    if (-not (Get-Module -Name $($moduleFile).Split(".")[0] -ErrorAction Stop)) {
-        Write-Host "Can't find Module $($moduleFile) to import, check that you copied the PS-Modules folder correctly."
-        Pause
-        Exit
+    # Return an object with the URLs
+    return @{
+        PVWAAPI = $URL_PVWAAPI
+        Logon = $URL_Logon
+        Logoff = $URL_Logoff
+    }
+}
+
+Function DetermineTenantTypeURLs(){
+param(
+    [ValidateScript({
+        If(![string]::IsNullOrEmpty($_)) {
+            $isValid = ($_ -like "*.privilegecloud.cyberark.cloud*") -or ($_ -like "*.cyberark.cloud*") -or ($_ -like "*.privilegecloud.cyberark.com*") -or ($_ -like "*.cyberark.com*")
+            if (-not $isValid) {
+                throw "Invalid URL format. Please specify a valid Privilege Cloud tenant URL (e.g.https://<subdomain>.cyberark.cloud)."
+            }
+            $true
+        }
+        Else {
+            $true
+        }
+    })]
+    [Parameter(Mandatory = $true, HelpMessage = "Specify the URL of the Privilege Cloud tenant (e.g., https://<subdomain>.cyberark.cloud)")]
+    [string]$PortalURL
+)
+
+    # grab the subdomain, depending how the user entered the url (hostname only or URL).
+    if($PortalURL -match "https://"){
+        $PortalURL = ([System.Uri]$PortalURL).host
+        $portalSubDomainURL = $PortalURL.Split(".")[0]
+    }
+    Else{
+        $portalSubDomainURL = $PortalURL.Split(".")[0]
+    }
+    
+    Write-LogMessage -type Info -MSG "Determining Tenant Type based on URL..." -Early
+    # Check if standard or shared services implementation.
+    if($PortalURL -like "*.cyberark.com*"){
+        Write-LogMessage -type Info -MSG "Tenant Type is: Standard" -Early
+        # Standard
+        $pvwaURL = "https://$portalSubDomainURL.privilegecloud.cyberark.com"
+        $PortalURL = "https://$portalSubDomainURL.cyberark.com"
+        $vaultURL = "vault-$portalSubDomainURL.privilegecloud.cyberark.com"
+        $PVWA_API_URLs = Set-PVWAURLs -pvwaURL $pvwaURL
+    }
+    Else
+    {
+        # ispss
+        Write-LogMessage -type Info -MSG "Tenant Type is: Shared Services" -Early
+        $pvwaURL = "https://$portalSubDomainURL.privilegecloud.cyberark.cloud"
+        $PortalURL = "https://$portalSubDomainURL.cyberark.cloud"
+        $vaultURL = "vault-$portalSubDomainURL.privilegecloud.cyberark.cloud"
+        $PVWA_API_URLs = Set-PVWAURLs -pvwaURL $pvwaURL
+        # Identity URL
+        Write-LogMessage -type Info -MSG "Retrieving Identity URL by following redirect of $($PortalURL)..." -Early
+        $IdentityURL = Get-IdentityURL -PortalURL $PortalURL
+        if ($IdentityURL){
+            Write-LogMessage -type Info -MSG  "Identity URL is: $IdentityURL"
+            $IdentityURL = "https://$IdentityURL"
+        }Else{
+            Write-LogMessage -type Warning -MSG  "Unable to determine Identity URL, Please enter it manually (eg `"aax4550.id.cyberark.cloud`")"
+            $IdentityURL = Read-Host "Identity URL "
+        }
+    }
+    if ($IdentityURL){
+        return [PSCustomObject]@{pvwaURL = $pvwaURL; portalURL = $PortalURL; vaultURL = $vaultURL; PVWA_API_URLs = $PVWA_API_URLs; IdentityURL = $IdentityURL}
+    } else {
+        return [PSCustomObject]@{pvwaURL = $pvwaURL; portalURL = $PortalURL; vaultURL = $vaultURL; PVWA_API_URLs = $PVWA_API_URLs}
     }
 }
 # SIG # Begin signature block
 # MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDppC/47sWXhgVr
-# 5em9IisOP0lW8zYWUQ7oLoLVtmqUlaCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCC2DjWQMyvxrR7u
+# 6Um96bPUlndFkn1SPvHvgp49lBAm66CCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -184,22 +218,22 @@ foreach ($moduleFile in $moduleFileNames){
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIO5fWYIXxHSmOQOnBsQpztQLtFW4yZlvH0r2UJh9c1ihMA0GCSqGSIb3
-# DQEBAQUABIICAApybChFiZVImdf3B/keKoHjY3SPlA0KO325qhCQwVxRTwA25jXW
-# WsUKTpd5SjUcaWtaWUFrfcJWPGfJb/Kaj+8ZTEjExkhx5KXM17d4CbuG5/DHgRGl
-# ET0yQTwo/HYyoZUk6s5zm7vLlqdeult9WUBkholZUkwnu3sGJ+6LqXPbR0aYZR85
-# 9LY9SN+a0MOh90U8NLkSEIehjd+1QOJuUlNQJCTct+A0F6s4m+3VYAYq+Uetb6S6
-# +eEevAVlA9NELJEImzUs3IcevVcfRg/YZywYzuuFhU+GCVEizLiYYROrUufHk/Aq
-# 8CSfS4+rsfhEFuBnCQnd+SMq8cDolEDRIFIhRZ30nMCSTclmHq9kCU0tdYTOP9fE
-# PHWQ24E8OpRB6352E0SZVoKyjexVOHMopbV3xio+fP9zrxR1TeDcaIxXyNPYF7cT
-# dxLDrRCnj1koOA9dKmbKacIwjmg5XP88wOWAar7jkP8Cxjr8CM0T3ZtmMCM8WKwD
-# YggRXDZRXIqQPCtDAq56e40pIJwE+yq5X+TdG/b4dVnVmc+bu4/jcl0V8KpYMMl3
-# IS24/hORm6YM3CL+Mq94fKYg+Fqfaj/EermqYKApVfzrCJRvOOgi+1YlR0A4PBk2
-# akZ1I+yqXif6A3W4tnJa1BZ7rRIWuTPeNF70eWpVQotzxnDtYmdpxsGxoYIOLDCC
+# AQkEMSIEIAexHMq9q1bqhuL0c7H4X6q+PKcqkxGc1jO8NMXnaZ3JMA0GCSqGSIb3
+# DQEBAQUABIICAIVYYbPkrJsR1wRjIlWgqNakjtA8cW6hJr8iFn1ghEjfV7xrKdu3
+# QlrAozqtlodPqxguD7iScvRRePWuxq+Le8+L49n8D1GCLMcX3eVjHiYBt6S9vQfd
+# uaWa0njZskjmFCjRS0PR4yQPeaJp86ZhaYYjHuER2jOL5ZuG4+b1rLcP1W6K3X/N
+# 0x0oeAUs0RHnhoCVonOXwq6/pWYCh2fEdmxaoccjTXwm0SauCx6yl9r2jPpmg+lz
+# cCteHf6paajSERMtk9ZCoyLGUud51Ss4fRylphIOh0nNSmCpStq+w7/3GX5BmJVy
+# hUMFSZkkPRW/Mvlo4fAMPPVOTSD6YaDx0GkjszIeNvwK6Q1WxBsH562subuSlLOa
+# YJ5wIeR0IkofULXeKDWe0g8kzvG3o3b1fg4X917ppuaKkwPiEo80J/WhN2Ff9Sb0
+# nCvXe4BzEZ2chNe+Vqcv+tZeoJRJkBmxtdfgkHlkwoZsPQ70y+K/e3IRoS8nCB0Y
+# 0x9TEXd5upAfWXOvxDIU+8IJpfX06taOSjdh/WQdlByN1YCxShGnOMpGAnKpII9V
+# WnC1petvycOcMxUyUdnyqHAbY1g5N3vm0Spa4pWlaW/qW+6RVgXIbo87XCCOcslN
+# s2TWAo+jN4NKAtKB0+wheb4JJ3UGSh3Pk0HzUItSTTTR39vaR8/KCz2soYIOLDCC
 # DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
 # BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFJ/XQaM3LAGSQsYfxuQW69SNitV4AhUAsrk+ldyh
-# G17LFVnCnRxf5FCIGgMYDzIwMjQwMjAxMDcwNzIwWjADAgEeoIGGpIGDMIGAMQsw
+# AQcXAzAhMAkGBSsOAwIaBQAEFKBedWDcuQkSTUDu0hAzeO86tqmCAhUAxP7oa9Cf
+# h1DnFJBmS4iECgGmiBEYDzIwMjQwMjAxMDcwNzEzWjADAgEeoIGGpIGDMIGAMQsw
 # CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
 # BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
 # QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
@@ -263,13 +297,13 @@ foreach ($moduleFile in $moduleFileNames){
 # cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
 # BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
 # BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjAxMDcwNzIwWjAvBgkqhkiG9w0BCQQxIgQg
-# vj2uPe3SR9oJp/16/+qUmGKo7jEXRi3RFdlDqAz+J1EwNwYLKoZIhvcNAQkQAi8x
+# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjAxMDcwNzEzWjAvBgkqhkiG9w0BCQQxIgQg
+# tM18BOIyQoAMRiNr5UNipAyWRWR/6bQ/E9Wx4RPuNZMwNwYLKoZIhvcNAQkQAi8x
 # KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAFqotIzJdWpoDhScnQjJr9jQJNOgFtxmsp9QCdWqrk2KpvFqmaqx
-# 0jInNDdBYsqXYL1iRemO+ggOK5paZyV9D2mwuBLFaboWWm/qiJUq7LTe7kAwB4KC
-# Bbtiw/yot6KmlTZLlA6UgAGr4K22G1K/UluVoHyY2M42NUQEuWdQSAywEof7I7gs
-# Z4S9veD4kIToKszmCLoYgQOdPG1XMuXx1p8F38Bq+nWLwnmYg+uq6k3SnVujMA42
-# lNFV6N9unKYQxa+F8ih2qVW7ZnOHVgbV7DEeoyauSb+EHCkBLBlG4U0XBd1o4N1+
-# DLuo3VBLNkkkX+UHCBOJ3nbsWrAYp/ETQ6g=
+# hvcNAQEBBIIBAFFfZYJTxB0SrQktXGowaeL5Jdk6tUWdTAWOiaB3NNq+TfyD/DJY
+# 79LbRtTHXa6aanKYun7RUYEibObrIM3Zb+bi04ZNBCDz6A1+tABh06CjMO2eMxxK
+# rgZpRyJzd0j56u+Fbji7wV50WK81ingzwGOFWDx4Kb4GcIhu8ofFhcRQnW78ZA9Y
+# 9cd93iaOqsIMSTDBamuNQmdsyrbvd6DfPN8SFWJhz8nKglmqPfpJp1kuJpllDKJt
+# qSgnI8Z5p/8ZFaD3K8QjuujOliJ+EoYo3fMQ095bv/OTmBDhmWEDXQ3wjmjXEGTT
+# r42cbxCGcQloULsYC6WCoNopgIcMDkvyrbk=
 # SIG # End signature block

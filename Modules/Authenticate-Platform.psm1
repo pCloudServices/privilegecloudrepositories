@@ -1,55 +1,48 @@
-# Modules
-$moduleFileNames = @(
-"Authenticate-Platform.psm1",
-"Collect-ExceptionMessage.psm1",
-"DetermineTenantTypeURLs.psm1",
-"Get-Choice.psm1",
-"Get-IdentityURL.psm1",
-"Get-UserFile.psm1",
-"IdentityAuth.psm1",
-"IdentityFunctions.psm1"
-"IgnoreCertErrors.psm1",
-"privilegecloudAuth.psm1",
-"pvwaFunctions.psm1"
-"Write-LogMessage.psm1"
-)
-foreach ($moduleFile in $moduleFileNames){
-
-    #Write-Host "Importing $moduleFile" -ForegroundColor Gray
-    $modulePaths = @(
-    "..\\PS-Modules\\$moduleFile",
-    "..\\..\\PS-Modules\\$moduleFile",
-    ".\\PS-Modules\\$moduleFile", 
-    ".\\$moduleFile"
-    "..\\$moduleFile"
-    ".\\..\\$moduleFile"
-    "..\\..\\$moduleFile"
+﻿<# Call the module/function 'DetermineTenantTypeURL' first like this:
+ $platformURLs = DetermineTenantTypeURLs -PortalURL $PortalURL
+ Than call this module to get a token based on the above module determining if auth should be to Identity or PVWA directly.
+#>
+Function Authenticate-Platform {
+    Param (
+        [psobject]$platformURLs,
+        [System.Management.Automation.CredentialAttribute()]$creds,
+        [Parameter(Mandatory = $False)]
+        [ValidateSet("cyberark","identity")]
+        [string]$ForceAuthType
     )
 
-    foreach ($modulePath in $modulePaths) {
-        # Only attempt import if path is found
-        if (Test-Path $modulePath) {
-            try {
-                Import-Module $modulePath -ErrorAction Stop -DisableNameChecking -Force
-            } catch {
-                Write-Host "Failed to import module from $modulePath. Error: $_"
-                Pause
-                Exit
-            }
-         }
-    }
+    Try {
+        # Determine the authentication type based on input parameters and conditions
+        $authType = "cyberark" # Default to cyberark
+        if ($creds.UserName -like "*saascorp*") {
+            $authType = "cyberark"
+        } elseif ($ForceAuthType) {
+            $authType = $ForceAuthType
+        } elseif ($platformURLs.IdentityURL -and (-not($creds.Username -like "*installeruser*"))) {
+            $authType = "identity"
+        }
 
-    if (-not (Get-Module -Name $($moduleFile).Split(".")[0] -ErrorAction Stop)) {
-        Write-Host "Can't find Module $($moduleFile) to import, check that you copied the PS-Modules folder correctly."
-        Pause
-        Exit
+        # Log the selected authentication type
+        Write-LogMessage -type Info -MSG "Using Token from $($authType) API." -Early
+
+        # Get the logon header based on the selected authentication type
+        $logonheader = $null
+        switch ($authType) {
+            "cyberark" { $logonheader = Get-PVWALogonHeader -Url $platformURLs.pvwaURL -Credentials $creds }
+            "identity" { $logonheader = Get-IdentityHeader -IdentityTenantURL $platformURLs.IdentityURL -UPCreds $creds }
+        }
+
+        return $logonheader
+    } Catch {
+        Write-LogMessage -Type Error -Msg "Error: $(Collect-ExceptionMessage $_.exception.message $($_.ErrorDetails.Message) $($_.exception.status) $($_.exception.Response.ResponseUri.AbsoluteUri))"
     }
 }
+
 # SIG # Begin signature block
 # MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDppC/47sWXhgVr
-# 5em9IisOP0lW8zYWUQ7oLoLVtmqUlaCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDPw1D2Ar9OChd5
+# gftt5/bs/5SBojn5EoFasGHFAyQH5qCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -184,22 +177,22 @@ foreach ($moduleFile in $moduleFileNames){
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIO5fWYIXxHSmOQOnBsQpztQLtFW4yZlvH0r2UJh9c1ihMA0GCSqGSIb3
-# DQEBAQUABIICAApybChFiZVImdf3B/keKoHjY3SPlA0KO325qhCQwVxRTwA25jXW
-# WsUKTpd5SjUcaWtaWUFrfcJWPGfJb/Kaj+8ZTEjExkhx5KXM17d4CbuG5/DHgRGl
-# ET0yQTwo/HYyoZUk6s5zm7vLlqdeult9WUBkholZUkwnu3sGJ+6LqXPbR0aYZR85
-# 9LY9SN+a0MOh90U8NLkSEIehjd+1QOJuUlNQJCTct+A0F6s4m+3VYAYq+Uetb6S6
-# +eEevAVlA9NELJEImzUs3IcevVcfRg/YZywYzuuFhU+GCVEizLiYYROrUufHk/Aq
-# 8CSfS4+rsfhEFuBnCQnd+SMq8cDolEDRIFIhRZ30nMCSTclmHq9kCU0tdYTOP9fE
-# PHWQ24E8OpRB6352E0SZVoKyjexVOHMopbV3xio+fP9zrxR1TeDcaIxXyNPYF7cT
-# dxLDrRCnj1koOA9dKmbKacIwjmg5XP88wOWAar7jkP8Cxjr8CM0T3ZtmMCM8WKwD
-# YggRXDZRXIqQPCtDAq56e40pIJwE+yq5X+TdG/b4dVnVmc+bu4/jcl0V8KpYMMl3
-# IS24/hORm6YM3CL+Mq94fKYg+Fqfaj/EermqYKApVfzrCJRvOOgi+1YlR0A4PBk2
-# akZ1I+yqXif6A3W4tnJa1BZ7rRIWuTPeNF70eWpVQotzxnDtYmdpxsGxoYIOLDCC
+# AQkEMSIEIKl6JvhL6N791Li/RHU72YuRK+MQvcC6f7IYrJo8ruOwMA0GCSqGSIb3
+# DQEBAQUABIICAJE/6yf/HCWe0GxOCErv4UmqSNBCTY+YpQDkiXXOzsClPGD4F+ux
+# bmyku8SVyMh9jj3y6JJ2j7c73Sl6Osau7U9shRLnLJtvzQW7geVurTXWRM9hEnen
+# S2cYiq3nKs19p/oIAIaf8xswzl+9cF7fwvoW0+NE1f7ZM5kisNr9wAQSsNaEGbIO
+# DsSzQ49xx7g4bcaeoDOVPZhgZ6fU5WWNVm5tO2ViHtdzbLYQUWQyYF9jspNwR3AK
+# xw0+GBDVDoTp3rJNJlac4kAPnAq2Wn1z4lDV1fma5Z4ebZ+/nRbLQOrHFDfd/dMH
+# kLXJy2zZLoiauJKb+wCmXypQ5+sHX/oOlAqxo8a65HZ2wm2lLJkO/WpcRjlzUIO+
+# r2yuvFxoCYfxdI8sAlRVORgHYsMK92PS3LzCG93N2EJt4b9GHvMCzApdRkpFQ1mF
+# wMl4qB/qMBSgDwOs0/vChKmCtzIvTjy4hmWi9qflo75lb6dXxbAvGuX9B6HQR/rY
+# 7ar5KmzI8pGVX1XpCOElyhh+8Pma8nPSIJUeD+0gXWEB5TQIezbolL9rCv5ywcit
+# ES/8jimk3i60xGYv7MLuSbu0mzoLQcgy6+cc/tonrYE50cQWsn8a/R9zGQrXpMVd
+# 2xes3ubYn8v79XmA4tve1cfH87HtV4Y8doF5PCLhYz4SNRowY9Ivb2NdoYIOLDCC
 # DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
 # BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFJ/XQaM3LAGSQsYfxuQW69SNitV4AhUAsrk+ldyh
-# G17LFVnCnRxf5FCIGgMYDzIwMjQwMjAxMDcwNzIwWjADAgEeoIGGpIGDMIGAMQsw
+# AQcXAzAhMAkGBSsOAwIaBQAEFCxn/GZ3Px+qg2wFB3WuLajY2bWYAhUA8F3i8kLH
+# beVIZUkehYpHh1fMEuoYDzIwMjQwMjAxMTgwNzAwWjADAgEeoIGGpIGDMIGAMQsw
 # CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
 # BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
 # QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
@@ -263,13 +256,13 @@ foreach ($moduleFile in $moduleFileNames){
 # cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
 # BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
 # BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjAxMDcwNzIwWjAvBgkqhkiG9w0BCQQxIgQg
-# vj2uPe3SR9oJp/16/+qUmGKo7jEXRi3RFdlDqAz+J1EwNwYLKoZIhvcNAQkQAi8x
+# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjAxMTgwNzAwWjAvBgkqhkiG9w0BCQQxIgQg
+# Sc6QkLknChH/NdxWVe3Pj9Kq7z5ntx8W3A4ZPfpKeeswNwYLKoZIhvcNAQkQAi8x
 # KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAFqotIzJdWpoDhScnQjJr9jQJNOgFtxmsp9QCdWqrk2KpvFqmaqx
-# 0jInNDdBYsqXYL1iRemO+ggOK5paZyV9D2mwuBLFaboWWm/qiJUq7LTe7kAwB4KC
-# Bbtiw/yot6KmlTZLlA6UgAGr4K22G1K/UluVoHyY2M42NUQEuWdQSAywEof7I7gs
-# Z4S9veD4kIToKszmCLoYgQOdPG1XMuXx1p8F38Bq+nWLwnmYg+uq6k3SnVujMA42
-# lNFV6N9unKYQxa+F8ih2qVW7ZnOHVgbV7DEeoyauSb+EHCkBLBlG4U0XBd1o4N1+
-# DLuo3VBLNkkkX+UHCBOJ3nbsWrAYp/ETQ6g=
+# hvcNAQEBBIIBAHZ4qVoSuMT0MzUuw9TAXCj9zLOTDRtzkYU+axXHzJScuTFcSv4K
+# OlCY4M8C7firoxSpC4jaFl2escflZPyZhCCeT3rE8fDkE8ynf0PAShDNHmCWIUW3
+# GgEC3tSu794CzOdidV8qN/+PyTLMAVmnYshOBkPcEFnqgu55L+9xTcUKlO5SX3UD
+# BYmRb1qG45rZSCzSrbkkXrX3p/qSSLQqT/xOkqLAEco9VNFqTnsRQMoXuCq6ocr+
+# w9KDqxLnWUKNPqVd7+d6YEBdObxzjDPbPFMVv7MLZcrElAQBLvwVZYL2cVgdahFv
+# kfCAyUOGlLkd0zGTMPBXTowL8WRjutxV7yE=
 # SIG # End signature block
