@@ -1,3 +1,86 @@
+Function Get-PVWALogonHeader {
+    <# 
+.SYNOPSIS 
+	Get-LogonHeader
+.DESCRIPTION
+	Get-LogonHeader
+.PARAMETER Credentials
+	The REST API Credentials to authenticate
+#>
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Management.Automation.CredentialAttribute()]$Credentials,
+        [Parameter(Mandatory = $true)]
+        [string]$Url
+    )
+	
+
+    $pvwaURL = Set-PVWAURLs -pvwaURL $url
+    $logonHeader = $null
+    if ([string]::IsNullOrEmpty($logonHeader)) {		
+        # Create the POST Body for the Logon
+        # ----------------------------------
+        $logonBody = @{ username = $Credentials.username.Replace('\', ''); password = $Credentials.GetNetworkCredential().password } | ConvertTo-Json
+        try {
+            # Logon
+            Write-LogMessage -type Info -MSG "Calling: $($pvwaURL.Logon)"
+            $logonToken = Invoke-RestMethod -Method Post -Uri $($pvwaURL.Logon) -Body $logonBody -ContentType "application/json" -TimeoutSec 2700 -ErrorVariable pvwaERR
+			
+            # Clear logon body
+            $logonBody = ""
+        } catch {
+            Write-LogMessage -Type Error -Msg "Error: $(Collect-ExceptionMessage $_.exception.message $($_.ErrorDetails.Message) $($_.exception.status) $($_.exception.Response.ResponseUri.AbsoluteUri) $pvwaERR)"
+        }
+
+        $logonHeader = $null
+        If ([string]::IsNullOrEmpty($logonToken)) {
+            Throw "Get-LogonHeader: Logon Token is Empty - Cannot login: $pvwaERR"
+        }Else{
+            Write-LogMessage -type Success "Successful Login!"
+        }
+        
+		
+        try {
+            # Create a Logon Token Header (This will be used through out all the script)
+            # ---------------------------
+            $logonHeader = @{Authorization = $logonToken }
+
+            return $logonHeader	
+        } catch {
+            Write-LogMessage -Type Error -Msg "Error: $(Collect-ExceptionMessage $_.exception.message $($_.ErrorDetails.Message) $($_.exception.status) $($_.exception.Response.ResponseUri.AbsoluteUri) $pvwaERR)"
+        }
+    }
+}
+
+Function Invoke-PVWALogoff {
+param(
+    [Parameter(Mandatory = $true)]
+    [Hashtable]$logonHeader,
+    [Parameter(Mandatory = $true)]
+    [string]$url
+)
+    <# 
+.SYNOPSIS 
+	Invoke-Logoff
+.DESCRIPTION
+	Logoff a PVWA session
+#>
+
+    $pvwaURL = Set-PVWAURLs -pvwaURL $url
+
+    try {
+        # Logoff the session
+        # ------------------
+        If ($null -ne $logonHeader) {
+            Write-LogMessage -Type Info -MSG "Logoff Session..." -Early
+            Write-LogMessage -type Info -MSG "Calling: $($pvwaURL.Logoff)" -Early
+            Invoke-RestMethod -Method Post -Uri $($pvwaURL.Logoff) -Headers $logonHeader -ContentType "application/json" -TimeoutSec 2700 -ErrorVariable pvwaERR | Out-Null
+        }
+    } catch {
+        Write-LogMessage -Type Error -Msg "Error: $(Collect-ExceptionMessage $_.exception.message $($_.ErrorDetails.Message) $($_.exception.status) $($_.exception.Response.ResponseUri.AbsoluteUri) $pvwaERR)"
+    }
+}
+
 Function Get-Safes {
     [CmdletBinding()]
     [OutputType([String])]
@@ -14,7 +97,7 @@ Function Get-Safes {
     try {
             Write-LogMessage -Type Info -Msg "Retrieving safes from the vault..." -Early
             $GetSafesList = @()
-            Write-LogMessage -Type Info -Msg "Calling $($URL_Safes)" -Early
+            Write-LogMessage -Type Info -Msg "Calling: $($URL_Safes)" -Early
             $safes = (Invoke-RestMethod -Uri $URL_Safes -Method GET -Headers $logonHeader -ContentType "application/json" -TimeoutSec 2700 -ErrorVariable pvwaERR) 
             $GetSafesList += $safes.value
             Write-LogMessage -Type Info -Msg "Total safes response: $($safes.count)" -Early
@@ -22,7 +105,7 @@ Function Get-Safes {
             Write-LogMessage -Type Info -Msg $nextLink -Early
 				
             While ($nextLink -ne "" -and $null -ne $nextLink) {
-                Write-LogMessage -Type Info -Msg "Calling $("$URL_PasswordVault/$nextLink")" -Early    
+                Write-LogMessage -Type Info -Msg "Calling: $("$URL_PasswordVault/$nextLink")" -Early    
                 $safes = (Invoke-RestMethod -Method Get -Uri $("$URL_PasswordVault/$nextLink") -Headers $logonHeader -ContentType "application/json" -TimeoutSec 2700 -ErrorVariable pvwaERR)
                 $nextLink = $safes.nextLink
                 Write-LogMessage -Type Info -Msg $nextLink -Early
@@ -51,7 +134,7 @@ Function Get-VaultPermissions{
 
     Try
     {
-        Write-LogMessage -Type Info -Msg "Calling $(("$PVWA_GetallUsers"+"?filter=UserName&search=$($pvwaUser)"))" -Early
+        Write-LogMessage -Type Info -Msg "Calling: $(("$PVWA_GetallUsers"+"?filter=UserName&search=$($pvwaUser)"))" -Early
         $UserDetails = Invoke-RestMethod -Uri ("$PVWA_GetallUsers"+"?filter=UserName&search=$($pvwaUser)") -Method Get -ContentType "application/json" -Headers $logonHeader -ErrorVariable pvwaERR
     }
     Catch
@@ -75,7 +158,7 @@ Function Get-VaultUsers{
 
     Try
     {
-        Write-LogMessage -Type Info -Msg "Calling $(("$PVWA_GetallUsers"+"?filter=UserName&search=$($pvwaUser)"))" -Early
+        Write-LogMessage -Type Info -Msg "Calling: $(("$PVWA_GetallUsers"+"?filter=UserName&search=$($pvwaUser)"))" -Early
         $UserDetails = Invoke-RestMethod -Uri ("$PVWA_GetallUsers"+"?filter=UserName&search=$($pvwaUser)") -Method Get -ContentType "application/json" -Headers $logonHeader -ErrorVariable pvwaERR
     }
     Catch
@@ -105,7 +188,7 @@ $SearchGroupURL = $URL_UsersGroups + "?filter=groupName eq Auditors&includeMembe
     Try
     {
         Write-Host "Retrieving Auditors Group" -ForegroundColor Gray
-        Write-LogMessage -Type Info -Msg "Calling $($SearchGroupURL)" -Early
+        Write-LogMessage -Type Info -Msg "Calling: $($SearchGroupURL)" -Early
         $GetUserGroupsResponse = Invoke-RestMethod -Method Get -Uri $SearchGroupURL -Headers $logonheader -ContentType "application/json" -TimeoutSec 2700
         return $GetUserGroupsResponse.value
     }
@@ -135,7 +218,7 @@ $URL_UserSetGroup = $URL_UsersGroups + "/{0}/Members"
     {
         Write-Host "Adding user to Auditors group" -ForegroundColor Gray
         $body = @{MemberId = "" + $UsernameToAdd + "" } | ConvertTo-Json -Compress
-        Write-LogMessage -Type Info -Msg "Calling $(($URL_UserSetGroup -f $AuditorsId))" -Early
+        Write-LogMessage -Type Info -Msg "Calling: $(($URL_UserSetGroup -f $AuditorsId))" -Early
         $SetGroupResponse = Invoke-RestMethod -Method Post -Uri ($URL_UserSetGroup -f $AuditorsId) -Headers $logonheader -Body $body -ContentType "application/json" -TimeoutSec 2700
     }
     Catch
@@ -168,7 +251,7 @@ if($UsernameToRemove -match "."){
 }
     Try{
         write-host "Removing user from Auditors group." -ForegroundColor Gray
-        Write-LogMessage -Type Info -Msg "Calling $(($URL_UserDelGroup -f $AuditorsId, $UsernameToRemove))" -Early
+        Write-LogMessage -Type Info -Msg "Calling: $(($URL_UserDelGroup -f $AuditorsId, $UsernameToRemove))" -Early
         $SetGroupResponse = Invoke-RestMethod -Method Delete -Uri ($URL_UserDelGroup -f $AuditorsId, $UsernameToRemove) -Headers $logonheader -ContentType "application/json" -TimeoutSec 2700
         }
         Catch
@@ -176,11 +259,108 @@ if($UsernameToRemove -match "."){
            write-host $_.ErrorDetails.Message -ForegroundColor Gray
         } 
 }
+
+Function Format-URL($sText) {
+	if ($sText.Trim() -ne "") {
+		return [System.Web.HttpUtility]::UrlEncode($sText.Trim())
+	}
+	else {
+		return ""
+	}
+}
+
+Function New-SearchCriteria {
+	param ([string]$sURL, [string]$sSearch, [string]$sSortParam, [string]$sSafeName, [int]$iLimitPage, [int]$iOffsetPage = 0)
+	[string]$retURL = $sURL
+	$retURL += "?"
+	
+	if (![string]::IsNullOrEmpty($sSearch)) {
+		$retURL += "search=$(Format-URL $sSearch)&"
+	}
+	if (![string]::IsNullOrEmpty($sSafeName)) {
+		$retURL += "filter=safename eq $(Format-URL $sSafeName)&"
+	}
+	if (![string]::IsNullOrEmpty($sSortParam)) {
+		$retURL += "sort=$(Format-URL $sSortParam)&"
+	}
+	if ($iLimitPage -gt 0) {
+		$retURL += "limit=$iLimitPage&"
+	}
+		
+	if ($retURL[-1] -eq '&') {
+		$retURL = $retURL.substring(0, $retURL.length - 1) 
+ }
+	return $retURL
+}
+
+Function Get-Account{
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$AccountName,
+
+        [Parameter(Mandatory=$true)]
+        [string]$URLAPI,
+
+        [Parameter(Mandatory=$true)]
+        [hashtable]$logonheader,
+
+        [Parameter(Mandatory=$true)]
+        [string]$SafeName,
+
+        [Parameter(Mandatory=$true)]
+        [int]$limitPage
+    )
+
+    $URL_Accounts = $URLAPI + "/Accounts"
+    
+    $AccountsURLWithFilters = ""
+    $AccountsURLWithFilters = $(New-SearchCriteria -sURL $URL_Accounts -sSearch $AccountName -sSafeName $SafeName -iLimitPage $limitPage)
+    
+    Try
+    {
+        Write-LogMessage -Type Info -Msg "Calling: $($AccountsURLWithFilters)" -Early
+        $GetAccountsResponse = Invoke-RestMethod -Method Get -Uri $AccountsURLWithFilters -Headers $logonheader -ContentType "application/json" -TimeoutSec 2700 -ErrorVariable pvwaERR
+        return $GetAccountsResponse
+    }
+    Catch
+    {
+        Write-LogMessage -Type Error -Msg "Error: $(Collect-ExceptionMessage $_.exception.message $($_.ErrorDetails.Message) $($_.exception.status) $($_.exception.Response.ResponseUri.AbsoluteUri) $pvwaERR)"
+    }
+}
+
+
+Function Get-AccountPassword{
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$AccountID,
+
+        [Parameter(Mandatory=$true)]
+        [string]$URLAPI,
+
+        [Parameter(Mandatory=$true)]
+        [hashtable]$logonheader
+    )
+
+    $URL_Accounts = $URLAPI + "/Accounts"
+    $URL_AccountPW = "$URL_Accounts/$AccountID/Password/Retrieve"
+
+    Try
+    {
+        Write-LogMessage -Type Info -Msg "Calling: $($URL_AccountPW)" -Early
+        $GetAccountPassword = Invoke-RestMethod -Method POST -Uri $URL_AccountPW -Headers $logonheader -ContentType "application/json" -TimeoutSec 2700 -ErrorVariable pvwaERR
+        return $GetAccountPassword
+    }
+    Catch{
+        Write-LogMessage -Type Error -Msg "Error: $(Collect-ExceptionMessage $_.exception.message $($_.ErrorDetails.Message) $($_.exception.status) $($_.exception.Response.ResponseUri.AbsoluteUri) $pvwaERR)"
+    }
+}
 # SIG # Begin signature block
-# MIIqRQYJKoZIhvcNAQcCoIIqNjCCKjICAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCGEBJDX+SIzC3p
-# KZD5mr45j0paoZxxDkk/TEFx92s02KCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDzfx9GUNzI5Yui
+# 90zZwRPwLUt2hFS0AdtZW9Ep3TCq5qCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -310,97 +490,97 @@ if($UsernameToRemove -match "."){
 # oZ6wZE9s0guXjXwwWfgQ9BSrEHnVIyKEhzKq7r7eo6VyjwOzLXLSALQdzH66cNk+
 # w3yT6uG543Ydes+QAnZuwQl3tp0/LjbcUpsDttEI5zp1Y4UfU4YA18QbRGPD1F9y
 # wjzg6QqlDtFeV2kohxa5pgyV9jOyX4/x0mu74qADxWHsZNVvlRLMUZ4zI4y3KvX8
-# vZsjJFVKIsvyCgyXgNMM5Z4xghFEMIIRQAIBATBsMFwxCzAJBgNVBAYTAkJFMRkw
+# vZsjJFVKIsvyCgyXgNMM5Z4xghFFMIIRQQIBATBsMFwxCzAJBgNVBAYTAkJFMRkw
 # FwYDVQQKExBHbG9iYWxTaWduIG52LXNhMTIwMAYDVQQDEylHbG9iYWxTaWduIEdD
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIIrcwsViFkvSRQRUWCqdy+or+9O/VLBEJ5IonjwLf1t8MA0GCSqGSIb3
-# DQEBAQUABIICAGOy6WzehZcgoUTRB/8FE9VYaEtlze7zs/tnuFx9jGWu9p9zhTv6
-# wcRZGIiyftPGFSVnWr0Kvyeso3BJ3AX12ai1TwYBZ/l9d1g5J0jBvH1ryhjfPigo
-# OZ7CPyqw7Z8EGgiyyJdC7qKWKifF2l8wZcy0KrAB2GbKrHqdQqqGjUlsRBNOihJb
-# 8qhsYqX3EP1ohLYCb/EBg28M7oiqGo9hjVN5479wciUBzOHd2E+xWEDwLi00IcQe
-# kCez1u+1DIOFKyKgq5Z82Zal3Xa7sZsWxu13GVLNQQm1PKFMo7A33EN2xWeAh0ik
-# tnNEuhF5GQqhe3XeBlmXxzdYtyGlATBuyT9MJS362rA9bti+/lZ9uIE7Qa2Vxw6t
-# hOLh03NQHOzU0lugXrl035JJNljY5fEqHUsdKcbbtquCbBjQTighGFBvPYiU6yjQ
-# MIDD414gJbrRcLY+QUvyaF6JHTVQungj1JKPpds3uQ5N72yTDRX0hf2/u0AXd2QB
-# YdIWhDydzcNP032RV1qTkK1uzflEeZSpOeSP6iDCu35SbAWAVexLY687ZwTe9CkA
-# 5dUjxET02NlwCSCFbUJbi0YimmG0FcJFu4gH4Lv9kdjUmGA4vfs8JeJ+hpol9wm0
-# ySGLY3mLpi0ZFj3jJJ3tr7cxCXks8njuPcCnfziFpeC2jxF+53011WgUoYIOKzCC
-# DicGCisGAQQBgjcDAwExgg4XMIIOEwYJKoZIhvcNAQcCoIIOBDCCDgACAQMxDTAL
-# BglghkgBZQMEAgEwgf4GCyqGSIb3DQEJEAEEoIHuBIHrMIHoAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFDT2Mrjt08xUK2OEOymIRM4NYf8cAhQfNxMtUvcR
-# w0M/E7C7gp/rKOgA1RgPMjAyNDAyMDYwMDA2NDVaMAMCAR6ggYakgYMwgYAxCzAJ
-# BgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UE
-# CxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazExMC8GA1UEAxMoU3ltYW50ZWMgU0hB
-# MjU2IFRpbWVTdGFtcGluZyBTaWduZXIgLSBHM6CCCoswggU4MIIEIKADAgECAhB7
-# BbHUSWhRRPfJidKcGZ0SMA0GCSqGSIb3DQEBCwUAMIG9MQswCQYDVQQGEwJVUzEX
-# MBUGA1UEChMOVmVyaVNpZ24sIEluYy4xHzAdBgNVBAsTFlZlcmlTaWduIFRydXN0
-# IE5ldHdvcmsxOjA4BgNVBAsTMShjKSAyMDA4IFZlcmlTaWduLCBJbmMuIC0gRm9y
-# IGF1dGhvcml6ZWQgdXNlIG9ubHkxODA2BgNVBAMTL1ZlcmlTaWduIFVuaXZlcnNh
-# bCBSb290IENlcnRpZmljYXRpb24gQXV0aG9yaXR5MB4XDTE2MDExMjAwMDAwMFoX
-# DTMxMDExMTIzNTk1OVowdzELMAkGA1UEBhMCVVMxHTAbBgNVBAoTFFN5bWFudGVj
-# IENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1hbnRlYyBUcnVzdCBOZXR3b3JrMSgw
-# JgYDVQQDEx9TeW1hbnRlYyBTSEEyNTYgVGltZVN0YW1waW5nIENBMIIBIjANBgkq
-# hkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1mdWVVPnYxyXRqBoutV87ABrTxxrDKP
-# BWuGmicAMpdqTclkFEspu8LZKbku7GOz4c8/C1aQ+GIbfuumB+Lef15tQDjUkQbn
-# QXx5HMvLrRu/2JWR8/DubPitljkuf8EnuHg5xYSl7e2vh47Ojcdt6tKYtTofHjmd
-# w/SaqPSE4cTRfHHGBim0P+SDDSbDewg+TfkKtzNJ/8o71PWym0vhiJka9cDpMxTW
-# 38eA25Hu/rySV3J39M2ozP4J9ZM3vpWIasXc9LFL1M7oCZFftYR5NYp4rBkyjyPB
-# MkEbWQ6pPrHM+dYr77fY5NUdbRE6kvaTyZzjSO67Uw7UNpeGeMWhNwIDAQABo4IB
-# dzCCAXMwDgYDVR0PAQH/BAQDAgEGMBIGA1UdEwEB/wQIMAYBAf8CAQAwZgYDVR0g
-# BF8wXTBbBgtghkgBhvhFAQcXAzBMMCMGCCsGAQUFBwIBFhdodHRwczovL2Quc3lt
-# Y2IuY29tL2NwczAlBggrBgEFBQcCAjAZGhdodHRwczovL2Quc3ltY2IuY29tL3Jw
-# YTAuBggrBgEFBQcBAQQiMCAwHgYIKwYBBQUHMAGGEmh0dHA6Ly9zLnN5bWNkLmNv
-# bTA2BgNVHR8ELzAtMCugKaAnhiVodHRwOi8vcy5zeW1jYi5jb20vdW5pdmVyc2Fs
-# LXJvb3QuY3JsMBMGA1UdJQQMMAoGCCsGAQUFBwMIMCgGA1UdEQQhMB+kHTAbMRkw
-# FwYDVQQDExBUaW1lU3RhbXAtMjA0OC0zMB0GA1UdDgQWBBSvY9bKo06FcuCnvEHz
-# KaI4f4B1YjAfBgNVHSMEGDAWgBS2d/ppSEefUxLVwuoHMnYH0ZcHGTANBgkqhkiG
-# 9w0BAQsFAAOCAQEAdeqwLdU0GVwyRf4O4dRPpnjBb9fq3dxP86HIgYj3p48V5kAp
-# reZd9KLZVmSEcTAq3R5hF2YgVgaYGY1dcfL4l7wJ/RyRR8ni6I0D+8yQL9YKbE4z
-# 7Na0k8hMkGNIOUAhxN3WbomYPLWYl+ipBrcJyY9TV0GQL+EeTU7cyhB4bEJu8LbF
-# +GFcUvVO9muN90p6vvPN/QPX2fYDqA/jU/cKdezGdS6qZoUEmbf4Blfhxg726K/a
-# 7JsYH6q54zoAv86KlMsB257HOLsPUqvR45QDYApNoP4nbRQy/D+XQOG/mYnb5DkU
-# vdrk08PqK1qzlVhVBH3HmuwjA42FKtL/rqlhgTCCBUswggQzoAMCAQICEHvU5a+6
-# zAc/oQEjBCJBTRIwDQYJKoZIhvcNAQELBQAwdzELMAkGA1UEBhMCVVMxHTAbBgNV
-# BAoTFFN5bWFudGVjIENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1hbnRlYyBUcnVz
-# dCBOZXR3b3JrMSgwJgYDVQQDEx9TeW1hbnRlYyBTSEEyNTYgVGltZVN0YW1waW5n
-# IENBMB4XDTE3MTIyMzAwMDAwMFoXDTI5MDMyMjIzNTk1OVowgYAxCzAJBgNVBAYT
-# AlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3lt
-# YW50ZWMgVHJ1c3QgTmV0d29yazExMC8GA1UEAxMoU3ltYW50ZWMgU0hBMjU2IFRp
-# bWVTdGFtcGluZyBTaWduZXIgLSBHMzCCASIwDQYJKoZIhvcNAQEBBQADggEPADCC
-# AQoCggEBAK8Oiqr43L9pe1QXcUcJvY08gfh0FXdnkJz93k4Cnkt29uU2PmXVJCBt
-# MPndHYPpPydKM05tForkjUCNIqq+pwsb0ge2PLUaJCj4G3JRPcgJiCYIOvn6QyN1
-# R3AMs19bjwgdckhXZU2vAjxA9/TdMjiTP+UspvNZI8uA3hNN+RDJqgoYbFVhV9Hx
-# AizEtavybCPSnw0PGWythWJp/U6FwYpSMatb2Ml0UuNXbCK/VX9vygarP0q3InZl
-# 7Ow28paVgSYs/buYqgE4068lQJsJU/ApV4VYXuqFSEEhh+XetNMmsntAU1h5jlIx
-# Bk2UA0XEzjwD7LcA8joixbRv5e+wipsCAwEAAaOCAccwggHDMAwGA1UdEwEB/wQC
-# MAAwZgYDVR0gBF8wXTBbBgtghkgBhvhFAQcXAzBMMCMGCCsGAQUFBwIBFhdodHRw
-# czovL2Quc3ltY2IuY29tL2NwczAlBggrBgEFBQcCAjAZGhdodHRwczovL2Quc3lt
-# Y2IuY29tL3JwYTBABgNVHR8EOTA3MDWgM6Axhi9odHRwOi8vdHMtY3JsLndzLnN5
-# bWFudGVjLmNvbS9zaGEyNTYtdHNzLWNhLmNybDAWBgNVHSUBAf8EDDAKBggrBgEF
-# BQcDCDAOBgNVHQ8BAf8EBAMCB4AwdwYIKwYBBQUHAQEEazBpMCoGCCsGAQUFBzAB
-# hh5odHRwOi8vdHMtb2NzcC53cy5zeW1hbnRlYy5jb20wOwYIKwYBBQUHMAKGL2h0
-# dHA6Ly90cy1haWEud3Muc3ltYW50ZWMuY29tL3NoYTI1Ni10c3MtY2EuY2VyMCgG
-# A1UdEQQhMB+kHTAbMRkwFwYDVQQDExBUaW1lU3RhbXAtMjA0OC02MB0GA1UdDgQW
-# BBSlEwGpn4XMG24WHl87Map5NgB7HTAfBgNVHSMEGDAWgBSvY9bKo06FcuCnvEHz
-# KaI4f4B1YjANBgkqhkiG9w0BAQsFAAOCAQEARp6v8LiiX6KZSM+oJ0shzbK5pnJw
-# Yy/jVSl7OUZO535lBliLvFeKkg0I2BC6NiT6Cnv7O9Niv0qUFeaC24pUbf8o/mfP
-# cT/mMwnZolkQ9B5K/mXM3tRr41IpdQBKK6XMy5voqU33tBdZkkHDtz+G5vbAf0Q8
-# RlwXWuOkO9VpJtUhfeGAZ35irLdOLhWa5Zwjr1sR6nGpQfkNeTipoQ3PtLHaPpp6
-# xyLFdM3fRwmGxPyRJbIblumFCOjd6nRgbmClVnoNyERY3Ob5SBSe5b/eAL13sZgU
-# chQk38cRLB8AP8NLFMZnHMweBqOQX1xUiz7jM1uCD8W3hgJOcZ/pZkU/djGCAlow
-# ggJWAgEBMIGLMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jw
-# b3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazEoMCYGA1UE
-# AxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQQIQe9Tlr7rMBz+hASME
-# IkFNEjALBglghkgBZQMEAgGggaQwGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEE
-# MBwGCSqGSIb3DQEJBTEPFw0yNDAyMDYwMDA2NDVaMC8GCSqGSIb3DQEJBDEiBCCs
-# dMKbiOuwLagPcfW4d3hZjlxkLqfc2pthccgO8Sjk/TA3BgsqhkiG9w0BCRACLzEo
-# MCYwJDAiBCDEdM52AH0COU4NpeTefBTGgPniggE8/vZT7123H99h+DALBgkqhkiG
-# 9w0BAQEEggEAPsKdPe+WrFvMtAfx8qvn9ARm39FZI+/1XezngDLbxyod7NYKGFYN
-# C1JeS6znJtjDECeO2VuC0/nKWnA6nL54HUSBV5TdVQORABWM+2MlryFpcra+3UIq
-# J1I38BPFoteRK3VQhMaDcAuGbs7kNithTjGuAGiiLcbxfqeB0bddUnVar89gMj68
-# M5ed0dYRN9yzhXyiV4opHToNbZPg9gKWd4wrLqAvhYHwzIe7g4ddzkL+rr6fUiDf
-# DWiNidBTine9hJ3M+JkANmAW1XuLLJ2eNlP3PqYWK45OU7gXafdcuHk9yzvZqM7B
-# rrlBStErWw+cwA22y8F0akGiXqkcPbx+wg==
+# AQkEMSIEIJoW3GfI02olEVSwCoguVWqSKd+Qj7dpFl8IURe8zaUaMA0GCSqGSIb3
+# DQEBAQUABIICAKJ05p5EnWRPJgh6yrmhbFPlE2EROkezhflIxnEwF0EHiUJ3Mz8F
+# YgIOdBw+7be7GjvsMT5q0LB8dY/4ScYxRnmBnjm7Bcpwt9FJp/2jMHAPwR1MwUkH
+# 1ILDb4z7jSFnd5Xlrxq3nbYReNSbQszHWCpz3u+qNcPitvZoWDwcLkzvJOpiU/ur
+# 6SIJvQHbY/JVwu8Iy2nEcnhDAv/o8RjRqIBn6rR5qb3XK6o4NpuWcmSSVxIhI4wt
+# Mrs+h9FtyZv+og2LEvVMA8Uzh4r15p/6fNQifcxAWE7cno4OrlY9nvY2etDFVTJm
+# bA0p2EifGwn+7xJ8Ti5e6yMwrfgQIY6U6IogVMg7JUNOuYsK7wNUzAjBb//7zCTb
+# Ewv9wfgKEaC3fOuMDV2r3pdK4yl89oz8DQYX3cRhdTWiIHDtnhxd6Py3WisyP6EY
+# Dc310GD7muZSXOIhB9GEp4IYGZB+MNRdaUsTgm3WXHzJF1OsuwC6cyBFyxQFqq3q
+# 8q0c9StNrk+akLUo4E+x/F5zg1bh1/EvXeTL6n/fCHyB4JyB6dXJSrItV77fiknY
+# PICg9KWD0zYCZfLUftgT1s/aoP1q1A4vWaIVvR89mgc/uHZCYgs/GnrAbeVE4BFY
+# 3ASKK9Wyr2FJIy5vObRp1A1cCqLUCRnX9nYXfo+KWbxZEoFhoW+AX/PLoYIOLDCC
+# DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
+# BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
+# AQcXAzAhMAkGBSsOAwIaBQAEFKGhfz0gRxSeUPhKlKrXiI63O1P/AhUAjDGno6q2
+# 9S3RF9nxceIqdUw7dRMYDzIwMjQwMzA3MjMwMjIzWjADAgEeoIGGpIGDMIGAMQsw
+# CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
+# BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
+# QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
+# ewWx1EloUUT3yYnSnBmdEjANBgkqhkiG9w0BAQsFADCBvTELMAkGA1UEBhMCVVMx
+# FzAVBgNVBAoTDlZlcmlTaWduLCBJbmMuMR8wHQYDVQQLExZWZXJpU2lnbiBUcnVz
+# dCBOZXR3b3JrMTowOAYDVQQLEzEoYykgMjAwOCBWZXJpU2lnbiwgSW5jLiAtIEZv
+# ciBhdXRob3JpemVkIHVzZSBvbmx5MTgwNgYDVQQDEy9WZXJpU2lnbiBVbml2ZXJz
+# YWwgUm9vdCBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTAeFw0xNjAxMTIwMDAwMDBa
+# Fw0zMTAxMTEyMzU5NTlaMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRl
+# YyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazEo
+# MCYGA1UEAxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQTCCASIwDQYJ
+# KoZIhvcNAQEBBQADggEPADCCAQoCggEBALtZnVlVT52Mcl0agaLrVfOwAa08cawy
+# jwVrhponADKXak3JZBRLKbvC2Sm5Luxjs+HPPwtWkPhiG37rpgfi3n9ebUA41JEG
+# 50F8eRzLy60bv9iVkfPw7mz4rZY5Ln/BJ7h4OcWEpe3tr4eOzo3HberSmLU6Hx45
+# ncP0mqj0hOHE0XxxxgYptD/kgw0mw3sIPk35CrczSf/KO9T1sptL4YiZGvXA6TMU
+# 1t/HgNuR7v68kldyd/TNqMz+CfWTN76ViGrF3PSxS9TO6AmRX7WEeTWKeKwZMo8j
+# wTJBG1kOqT6xzPnWK++32OTVHW0ROpL2k8mc40juu1MO1DaXhnjFoTcCAwEAAaOC
+# AXcwggFzMA4GA1UdDwEB/wQEAwIBBjASBgNVHRMBAf8ECDAGAQH/AgEAMGYGA1Ud
+# IARfMF0wWwYLYIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0cHM6Ly9kLnN5
+# bWNiLmNvbS9jcHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5bWNiLmNvbS9y
+# cGEwLgYIKwYBBQUHAQEEIjAgMB4GCCsGAQUFBzABhhJodHRwOi8vcy5zeW1jZC5j
+# b20wNgYDVR0fBC8wLTAroCmgJ4YlaHR0cDovL3Muc3ltY2IuY29tL3VuaXZlcnNh
+# bC1yb290LmNybDATBgNVHSUEDDAKBggrBgEFBQcDCDAoBgNVHREEITAfpB0wGzEZ
+# MBcGA1UEAxMQVGltZVN0YW1wLTIwNDgtMzAdBgNVHQ4EFgQUr2PWyqNOhXLgp7xB
+# 8ymiOH+AdWIwHwYDVR0jBBgwFoAUtnf6aUhHn1MS1cLqBzJ2B9GXBxkwDQYJKoZI
+# hvcNAQELBQADggEBAHXqsC3VNBlcMkX+DuHUT6Z4wW/X6t3cT/OhyIGI96ePFeZA
+# Ka3mXfSi2VZkhHEwKt0eYRdmIFYGmBmNXXHy+Je8Cf0ckUfJ4uiNA/vMkC/WCmxO
+# M+zWtJPITJBjSDlAIcTd1m6JmDy1mJfoqQa3CcmPU1dBkC/hHk1O3MoQeGxCbvC2
+# xfhhXFL1TvZrjfdKer7zzf0D19n2A6gP41P3CnXsxnUuqmaFBJm3+AZX4cYO9uiv
+# 2uybGB+queM6AL/OipTLAduexzi7D1Kr0eOUA2AKTaD+J20UMvw/l0Dhv5mJ2+Q5
+# FL3a5NPD6itas5VYVQR9x5rsIwONhSrS/66pYYEwggVLMIIEM6ADAgECAhB71OWv
+# uswHP6EBIwQiQU0SMA0GCSqGSIb3DQEBCwUAMHcxCzAJBgNVBAYTAlVTMR0wGwYD
+# VQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1
+# c3QgTmV0d29yazEoMCYGA1UEAxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGlu
+# ZyBDQTAeFw0xNzEyMjMwMDAwMDBaFw0yOTAzMjIyMzU5NTlaMIGAMQswCQYDVQQG
+# EwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5
+# bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNIQTI1NiBU
+# aW1lU3RhbXBpbmcgU2lnbmVyIC0gRzMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAw
+# ggEKAoIBAQCvDoqq+Ny/aXtUF3FHCb2NPIH4dBV3Z5Cc/d5OAp5LdvblNj5l1SQg
+# bTD53R2D6T8nSjNObRaK5I1AjSKqvqcLG9IHtjy1GiQo+BtyUT3ICYgmCDr5+kMj
+# dUdwDLNfW48IHXJIV2VNrwI8QPf03TI4kz/lLKbzWSPLgN4TTfkQyaoKGGxVYVfR
+# 8QIsxLWr8mwj0p8NDxlsrYViaf1OhcGKUjGrW9jJdFLjV2wiv1V/b8oGqz9KtyJ2
+# ZezsNvKWlYEmLP27mKoBONOvJUCbCVPwKVeFWF7qhUhBIYfl3rTTJrJ7QFNYeY5S
+# MQZNlANFxM48A+y3API6IsW0b+XvsIqbAgMBAAGjggHHMIIBwzAMBgNVHRMBAf8E
+# AjAAMGYGA1UdIARfMF0wWwYLYIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0
+# cHM6Ly9kLnN5bWNiLmNvbS9jcHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5
+# bWNiLmNvbS9ycGEwQAYDVR0fBDkwNzA1oDOgMYYvaHR0cDovL3RzLWNybC53cy5z
+# eW1hbnRlYy5jb20vc2hhMjU2LXRzcy1jYS5jcmwwFgYDVR0lAQH/BAwwCgYIKwYB
+# BQUHAwgwDgYDVR0PAQH/BAQDAgeAMHcGCCsGAQUFBwEBBGswaTAqBggrBgEFBQcw
+# AYYeaHR0cDovL3RzLW9jc3Aud3Muc3ltYW50ZWMuY29tMDsGCCsGAQUFBzAChi9o
+# dHRwOi8vdHMtYWlhLndzLnN5bWFudGVjLmNvbS9zaGEyNTYtdHNzLWNhLmNlcjAo
+# BgNVHREEITAfpB0wGzEZMBcGA1UEAxMQVGltZVN0YW1wLTIwNDgtNjAdBgNVHQ4E
+# FgQUpRMBqZ+FzBtuFh5fOzGqeTYAex0wHwYDVR0jBBgwFoAUr2PWyqNOhXLgp7xB
+# 8ymiOH+AdWIwDQYJKoZIhvcNAQELBQADggEBAEaer/C4ol+imUjPqCdLIc2yuaZy
+# cGMv41UpezlGTud+ZQZYi7xXipINCNgQujYk+gp7+zvTYr9KlBXmgtuKVG3/KP5n
+# z3E/5jMJ2aJZEPQeSv5lzN7Ua+NSKXUASiulzMub6KlN97QXWZJBw7c/hub2wH9E
+# PEZcF1rjpDvVaSbVIX3hgGd+Yqy3Ti4VmuWcI69bEepxqUH5DXk4qaENz7Sx2j6a
+# escixXTN30cJhsT8kSWyG5bphQjo3ep0YG5gpVZ6DchEWNzm+UgUnuW/3gC9d7GY
+# FHIUJN/HESwfAD/DSxTGZxzMHgajkF9cVIs+4zNbgg/Ft4YCTnGf6WZFP3YxggJa
+# MIICVgIBATCBizB3MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29y
+# cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
+# BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
+# BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
+# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMzA3MjMwMjIzWjAvBgkqhkiG9w0BCQQxIgQg
+# R5YKrBgPsruFRcuUlHyl7c4/mKV6SZF24vzSV2cmpFswNwYLKoZIhvcNAQkQAi8x
+# KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
+# hvcNAQEBBIIBAJI5F7UEZNEuPA/rfZLxaRGqKveS3n0PvyWOHBsogxpHNCW/GabS
+# u8u3niLppzzhUEoK5boHHpGMl+GGFFLPp7DNdkSaAQ3c61gk2BgY0FDUtbZAItG3
+# 9jGnAI3hNBYbceZPCHfdKW2aIPMLEIkys1suf21uRiNaxoiEvYSQydrosM6Mar5w
+# HfT4PTS36cH6r5eiYQpjcDIZ36qJZ2xb34z5yRvb1AitoX4tA/T1aUbtWi+3CHSa
+# ZYOYcw5fWyco1szMOi/OfqiGtbd347lXJrFP9nNanriVkhn/2vXyGIH8s5hhoglr
+# eVpluk7kViurkkNvp78dY8LzdI7egXdCrI0=
 # SIG # End signature block

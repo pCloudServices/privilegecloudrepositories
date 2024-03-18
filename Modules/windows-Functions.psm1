@@ -1,50 +1,123 @@
-# Modules
-$moduleFileNames = @(
-"ErrorHandling.psm1",
-"GenericFunctions.psm1",
-"IdentityFunctions.psm1"
-"Platform-Functions.psm1",
-"pvwaFunctions.psm1",
-"windows-Functions.psm1"
-)
-foreach ($moduleFile in $moduleFileNames){
-
-    #Write-Host "Importing $moduleFile" -ForegroundColor Gray
-    $modulePaths = @(
-    "..\\PS-Modules\\$moduleFile",
-    "..\\..\\PS-Modules\\$moduleFile",
-    ".\\PS-Modules\\$moduleFile", 
-    ".\\$moduleFile"
-    "..\\$moduleFile"
-    ".\\..\\$moduleFile"
-    "..\\..\\$moduleFile"
+﻿function Reset-LocalUserPassword {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Management.Automation.PSCredential]$Credential
     )
 
-    foreach ($modulePath in $modulePaths) {
-        # Only attempt import if path is found
-        if (Test-Path $modulePath) {
-            try {
-		#write-host "Importing $modulePath" -foreground gray
-                Import-Module $modulePath -ErrorAction Stop -DisableNameChecking -Force
-            } catch {
-                Write-Host "Failed to import module from $modulePath. Error: $_"
-                Pause
-                Exit
-            }
-         }
+    # Check for admin rights
+    if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+        Write-LogMessage -type Error -MSG "This script requires administrative privileges. Please run PowerShell as an administrator."
+        pause
+        exit
     }
 
-    if (-not (Get-Module -Name $($moduleFile).Split(".")[0] -ErrorAction Stop)) {
-        Write-Host "Can't find Module $($moduleFile) to import, check that you copied the PS-Modules folder correctly."
-        Pause
-        Exit
+    try {
+        $Username = $Credential.UserName
+        # Check if the user exists
+        $userExists = Get-LocalUser | Where-Object { $_.Name -eq $Username }
+        if (-not $userExists) {
+            Write-LogMessage -type Error -MSG "User '$Username' does not exist."
+            return
+        }
+
+        $securePassword = $Credential.Password
+        Set-LocalUser -Name $Username -Password $securePassword
+        Write-LogMessage -type Success -MSG "Password for user '$Username' has been reset successfully."
+    }
+    catch {
+        Write-LogMessage -type Error -MSG "Failed to reset password for user '$Username'. Error: $_"
     }
 }
+
+# @FUNCTION@ ======================================================================================================================
+# Name...........: Get-FileVersion
+# Description....: Method to return a file version
+# Parameters.....: File Path
+# Return Values..: File version
+# =================================================================================================================================
+Function Get-FileVersion
+{
+<#
+.SYNOPSIS
+	Method to return a file version
+
+.DESCRIPTION
+	Returns the File version and Build number
+	Returns Null if not found
+
+.PARAMETER FilePath
+	The path to the file to query
+#>
+	param ($filePath)
+	Begin {
+
+	}
+	Process {
+		$retFileVersion = $Null
+		try{
+			If (($null -ne $filePath) -and (Test-Path $filePath))
+			{
+				$path = Resolve-Path $filePath
+				$retFileVersion = ($path | Get-Item | Select-Object VersionInfo).VersionInfo.ProductVersion
+			}
+			else
+			{
+				throw "File path is empty"
+			}
+
+			return $retFileVersion
+		}
+		catch{
+			Throw $(New-Object System.Exception ("Cannot get File ($filePath) version",$_.Exception))
+		}
+		finally{
+
+		}
+	}
+	End {
+
+	}
+}
+
+Function EnforceTLS12 {
+    # Check if SecurityProtocol is SystemDefault or matches tls12
+    $securityProtocol = [Net.ServicePointManager]::SecurityProtocol
+    $isSystemDefault = $securityProtocol -eq 'SystemDefault'
+    $isTLS12 = $securityProtocol -match 'Tls12'
+
+    # Check .NET Framework registry settings for SchUseStrongCrypto
+    $GetTLSReg86 = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319').SchUseStrongCrypto -eq 1
+    $GetTLSReg64 = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319').SchUseStrongCrypto -eq 1
+
+    # Additional registry checks for TLS 1.2 Client and Server
+    $tls12ClientEnabled = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client" -Name "Enabled" -ErrorAction SilentlyContinue
+    $tls12ServerEnabled = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Server" -Name "Enabled" -ErrorAction SilentlyContinue
+
+    $isClientEnabled = $tls12ClientEnabled.Enabled -eq 1 -or $tls12ClientEnabled.Enabled -eq $null
+    $isServerEnabled = $tls12ServerEnabled.Enabled -eq 1 -or $tls12ServerEnabled.Enabled -eq $null
+
+    # Logic to handle SystemDefault or incorrect TLS 1.2 settings
+    if (-not $isTLS12 -and -not $isSystemDefault) {
+        Write-LogMessage -Type Info -MSG "Detected TLS12 is not enforced, enforcing it via registry"
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value 1 -Type DWord -Force -Verbose
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value 1 -Type DWord -Force -Verbose
+        Write-LogMessage -Type Info -MSG "Please restart the machine for changes to take effect."
+        Pause
+        Stop-Process -Id $PID
+    } elseif ($isSystemDefault -and -not ($GetTLSReg86 -and $GetTLSReg64 -and $isClientEnabled -and $isServerEnabled)) {
+        Write-LogMessage -Type Info -MSG "SystemDefault is set but registry settings for TLS 1.2 Client/Server are not properly configured. Configuring now."
+        # Add logic here to set the registry settings for TLS 1.2 Client and Server, if necessary
+    } else {
+        Write-LogMessage -Type Info -MSG "TLS 1.2 is properly configured."
+    }
+}
+
 # SIG # Begin signature block
 # MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBTF/3BXPqn8YWe
-# +SqtJ95OEf+dd3aFICTnxW7WVuOPj6CCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCq/JDWVutAvPce
+# uktloAG3xsrnuySmFBy5QmMGAtXvuKCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -179,22 +252,22 @@ foreach ($moduleFile in $moduleFileNames){
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIDDC1C/l3xyGrzugv3N3wLZk9W7E8ycqUkDFUfsEAhffMA0GCSqGSIb3
-# DQEBAQUABIICAEQfbu+z3LylXbs6a6jySEsdYsWXCUKIVerf3B0fsMFkStEDSz8S
-# jvEAZa2Md6ReK6aubBvvHBKivArEm4zmsx6lKhJLfdVF8ol5Ti9NQc6IdijPZlVo
-# cAvhzw3aFno+63t4cJYcwg2NqwKQI/9bfUBgAS/AbXHI4o0WKmoqkq26/JMWNgFI
-# ScHDs7fyT7NXcHRBVZPKnz9cWJfnzgI73eHJxTEjpNT0CABXw/HwpXdQpmm41MlS
-# 8XVjYnNH9cNnm7j/PqkG/tQ1dLQalD5lzfZ5ABloVU8GXPcj6XHWpCKZatOJs8vm
-# FgfHhg17wT9CTS9m8KbZUIE6JM3vag4Sz+ZlwYa0dp1AW4miezBcuddhuLqiPXZB
-# ftaGSgCt2LcICOOqDHG1hRGH+XAWjXvZ0oqdqpp5gTt8YIKlYc4QsAIrAtSdyVhg
-# qQjsYQldUnkeY4aiCTKPaPOvokxkdQoig1CnA3IMSnnVN15J9cY4SNueWCU36cd5
-# vHEmuJEm8oh/f+ni24Eet8Eb06fbYqq5YMbaoM4V90S4z7Mtw2TzCHe5qmwngedx
-# soQcX32oWwjlUnvr2AYVU7CqQUrWWhrJmUlz+u1Lexhw1oEzk0spiRPFUH7vapVu
-# SkF1ulJSS6PYeMWMovjv/LGHYPzH5TR3yggOccGQTtYO31JlqmLEd6QvoYIOLDCC
+# AQkEMSIEIBl+2OuHPynjLoGDYnxNeuzUcUvfouDl8IuqhG6M4FcZMA0GCSqGSIb3
+# DQEBAQUABIICANMuLos/FMVwLgcZH7YwEizwkP/tTRWoArNZi2P2lXziS3EdMW6X
+# e2Th0F5ZX2lopmu8KdW7BMxwSYEepJMQOZgbQmEQsNFleh7VgK5cek4ViRyAXG3/
+# Abp8oWKHzIDhjFDo+h7QoNKckaWzs3VZbk5S/0TcNu7EvSRvdFx61ggapGCG+9Vr
+# gmlOIkGtcqonuGD3B+NLGrO48Ylsdp5tLnXJ4qwxsEhoosFyQ3B4jqcUDvIB/3Iw
+# slSqViLfwV1mYd+ntpHgY9/B5vKXSg/tMa+VwqRwNBGzwbd+e6VBUXG0Nt3u4Kwr
+# jdFNdE+K7Jacv0y+cXBpNXfkApL/N28dhe9YK/+FuXTHCshWwua1XS35J5+9OJNH
+# cwXz8R5HohdlSWuzjmiMPI3yZdnCreWhQUvKuZFwsIHOWvRS9+RXqUqi6VJ3Xd9G
+# ILioiwBNxaTCWeUkh5RQ5n1GhiF9iryAt84gRbGU3obEdZdxDMBJBNbKneKq6Jft
+# +hTHEgyE5v5093zIFfAPxcrSpSZO+LtBUELbUsxXJl3g/Tp8JN2zOnxiXWg1goI4
+# gaDEqcBiCDCENSA51cGa7BiSFZNDo05PdEfRDtBXQpD2+HHkZaEPugGiZK0cf56d
+# A8WEAgRFUXueyXn5j+hgHdwdNklKIZbKc50vAPPLtuiInUwJ+0YlzitUoYIOLDCC
 # DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
 # BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFDK9qtD7KuVQceRcDgEnniQKwW8CAhUA/irAxhEX
-# 4qYrs+fIbag/IGa2vTcYDzIwMjQwMzA3MjMwMjI5WjADAgEeoIGGpIGDMIGAMQsw
+# AQcXAzAhMAkGBSsOAwIaBQAEFF4p+MVKf3jz7RtLvMS65B3B1cebAhUAsdF29hgx
+# /aZJWAkYW66Qf2mkQPoYDzIwMjQwMzA3MjMwMjUxWjADAgEeoIGGpIGDMIGAMQsw
 # CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
 # BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
 # QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
@@ -258,13 +331,13 @@ foreach ($moduleFile in $moduleFileNames){
 # cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
 # BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
 # BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMzA3MjMwMjI5WjAvBgkqhkiG9w0BCQQxIgQg
-# VIgZB7v5fDg3yR4mhtZzTZRv2XimJ6RdBSGQGExTZQAwNwYLKoZIhvcNAQkQAi8x
+# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMzA3MjMwMjUxWjAvBgkqhkiG9w0BCQQxIgQg
+# sySRcorSCml63aHckozexg64OuI7bLFOdhxkXwrQdu8wNwYLKoZIhvcNAQkQAi8x
 # KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAD9UKwox+SR+fJmTyqeB2NHpDqZzY0lDu3vWQg0VnhBVJC+e/5Uv
-# 1+7bDnvcQRotOBG5WfslPUMwbL1ftwS282l88uILsdDPtIL4AujR2YACUqHTpjCo
-# d2itnryi2zbZHa2/tgEHplMaw5nBF2EEJhrs9VlX6hFGR8Ev2hymKd0Lk/da3Ngq
-# hyA2DDH5+CwPeufEcfapPXN6/wG883FO5st+cGCRE9OWpxogwlaz+WCEG3RhGN38
-# 6z8EwFOaAnxp0648a3SO+BvYEYXZozWxtFNn9gWDJOTqQXHdMjgjYJ+P5EATeNlM
-# ns7fWOBPymU2OtISj0V/bRr8MOchekq99Eg=
+# hvcNAQEBBIIBAH36MfV+2rXEnLslb0SY/ezqtQeAVuH0huUjaZvOTQXuiZBsu+I0
+# 4ZITAn7AYVatMS2FLqATQvO6QRrJPi6E9Zx7ZeM0uD9534bzZf+EF/xfCg+mP3VH
+# PO1gmWKWaUjwC+A2g3kMTT+hs5xqY998Mlvt9UUnC35pJHSnilVPMxzSRLEdc9iN
+# 7IIjFZpmkK0aFQbDK54dJJOPZxUvdw8B+SX6MV5ZIZI7yyFMsf3cjCLnmITx/lLe
+# +FRh40lvA7XSEh1Ifnphu9TSVVt/Yzly090lpAjEDRGt6Hg3aYmOvdTycngV4XAb
+# O+oTfN2FYbVyORkZTHdGHKIC/8cskykkMow=
 # SIG # End signature block

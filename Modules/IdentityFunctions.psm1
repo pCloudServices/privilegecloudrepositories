@@ -17,11 +17,468 @@ Param
     }
     Return $resp.Result.Results.row.AdministrativeRights.Description
 }
+
+
+Function Get-IdentityURL($PortalURL) {
+    Add-Type -AssemblyName System.Net.Http
+
+    Function CreateHttpClient($allowAutoRedirect) {
+        $handler = New-Object System.Net.Http.HttpClientHandler
+        $handler.AllowAutoRedirect = $allowAutoRedirect
+        return New-Object System.Net.Http.HttpClient($handler)
+    }
+
+    # Create HttpClient with auto-redirect allowed
+    $client = CreateHttpClient($true)
+
+    try {
+        # Send a GET request to the URL
+        $response = $client.GetAsync($PortalURL).Result
+
+        # Check if the response status code indicates a redirection or success
+        if (($response.StatusCode -ge 300 -and $response.StatusCode -lt 400) -or ($response.StatusCode -eq "OK")) {
+            return $response.RequestMessage.RequestUri.Host
+        }
+        elseif ($response -eq $null) {
+            # Dispose the initial client and create a new one with auto-redirect disabled
+            $client.Dispose()
+            $client = CreateHttpClient($false)
+
+            $response = $client.GetAsync($PortalURL).Result
+            return $response.Headers.Location.Host
+        }
+        else {
+            Write-LogMessage -Type Error -Msg "Unexpected status code: $($response.StatusCode)"
+        }
+    }
+    catch {
+        Write-LogMessage -Type Error -Msg "Error: $($_.Exception.Message)"
+    }
+    finally {
+        # Cleanup
+        if ($response -ne $null) {
+            $response.Dispose()
+        }
+        if ($client -ne $null) {
+            $client.Dispose()
+        }
+    }
+}
+
+Function Get-IdentityHeader {
+    <#
+    .SYNOPSIS
+        Function to get Identity Header to enable running scripts using the token parameter. This will allow running the rest of the scripts in the directory for Identity Shared Services - Shared Services customers (ISPSS) (Privilege Cloud).
+        Token created using Identity documentation https://docs.cyberark.com/Product-Doc/OnlineHelp/PrivCloud-SS/Latest/en/Content/WebServices/ISP-Auth-APIs.htm
+
+    .DESCRIPTION
+        This function starts by requesting authentication into identity APIs. Once the process starts there can be multiple challenges that need to be responded with multiple options.
+        Each option is then being decided by the user. Once authentication is complete we get a token for the user to use for APIs within the ISPSS platform.
+
+    .PARAMETER IdentityTenantURL
+        The URL of the tenant. you can find it if you go to Identity Admin Portal > Settings > Customization > Tenant URL.
+
+    .Parameter IdentityUserName
+        The Username that will log into the system. It just needs the username, we will ask for PW, Push etc when doing the authentication.
+
+    .Parameter PCloudSubdomain
+        The Subdomain assigned to the privileged cloud environment.
+
+    .Parameter psPASFormat
+        Use this switch to output the token in a format that PSPas can consume directly.
+    
+    .Parameter UPCreds
+        Use this switch to output the token in a format that PSPas can consume directly.
+
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'IdentityUserName')]
+    Param (
+        [Parameter(
+            Mandatory = $true,
+            HelpMessage = "Identity Tenant URL")]
+        [string]$IdentityTenantURL,
+        [Parameter(
+            ParameterSetName = "IdentityUserName",
+            Mandatory = $true,
+            HelpMessage = "User to authenticate into the platform")]
+        [string]$IdentityUserName,
+        [Parameter(
+            Mandatory = $false,
+            HelpMessage = "Identity Tenant ID")]
+        [string]$IdentityTenantId,
+        [Parameter(
+            Mandatory = $false,
+            HelpMessage = "Output header in a format for use with psPAS")]
+        [switch]$psPASFormat,
+        [Parameter(
+            Mandatory = $false,
+            HelpMessage = "Subdomain of the privileged cloud environment")]
+        [Parameter(
+            ParameterSetName = 'psPASFormat',
+            Mandatory = $true,
+            HelpMessage = "Subdomain of the privileged cloud environment")]
+        [string]$PCloudSubdomain,
+        [Parameter(
+            ParameterSetName = 'UPCreds',
+            Mandatory = $true,
+            HelpMessage = "Credentials to pass if option is UP")]
+        [pscredential]$UPCreds
+
+    )
+    $ScriptFullPath = Get-Location
+    $LOG_FILE_PATH = "$ScriptFullPath\IdentityAuth.log"
+
+    $InDebug = $PSBoundParameters.Debug.IsPresent
+    $InVerbose = $PSBoundParameters.Verbose.IsPresent
+
+    #Platform Identity API
+
+    if ($IdentityTenantURL -match "https://") {
+        $IdaptiveBasePlatformURL = $IdentityTenantURL
+    } Else {
+        $IdaptiveBasePlatformURL = "https://$IdentityTenantURL"
+    }
+
+    $PCloudTenantAPIURL = "https://$PCloudSubdomain.privilegecloud.cyberark.cloud/PasswordVault/"
+
+    Write-LogMessage -type "Verbose" -MSG "URL used : $($IdaptiveBasePlatformURL|ConvertTo-Json -Depth 9)"
+
+    #Creating URLs
+
+    $IdaptiveBasePlatformSecURL = "$IdaptiveBasePlatformURL/Security"
+    $startPlatformAPIAuth = "$IdaptiveBasePlatformSecURL/StartAuthentication"
+    $startPlatformAPIAdvancedAuth = "$IdaptiveBasePlatformSecURL/AdvanceAuthentication"
+    $LogoffPlatform = "$IdaptiveBasePlatformSecURL/logout"
+
+    #Creating the username/password variables
+    if ('UPCreds' -eq $PSCmdlet.ParameterSetName) {
+        $InUPCreds = $true
+        $IdentityUserName = $UPCreds.UserName
+    }
+    $startPlatformAPIBody = @{TenantId = $IdentityTenantId; User = $IdentityUserName ; Version = "1.0" } | ConvertTo-Json -Compress -Depth 9
+    Write-LogMessage -type "Verbose" -MSG "URL body : $($startPlatformAPIBody|ConvertTo-Json -Depth 9)"
+    $IdaptiveResponse = Invoke-RestMethod -SessionVariable session -Uri $startPlatformAPIAuth -Method Post -ContentType "application/json" -Body $startPlatformAPIBody -TimeoutSec 30
+    Write-LogMessage -type "Verbose" -MSG "IdaptiveResponse : $($IdaptiveResponse|ConvertTo-Json -Depth 9)"
+
+    # We can use the following to give info to the customer $IdaptiveResponse.Result.Challenges.mechanisms
+
+    $SessionId = $($IdaptiveResponse.Result.SessionId)
+    Write-LogMessage -type "Verbose" -MSG "SessionId : $($SessionId |ConvertTo-Json -Depth 9)"
+
+    IF (![string]::IsNullOrEmpty($IdaptiveResponse.Result.IdpRedirectUrl)) {
+        IF ([string]::IsNullOrEmpty($PCloudSubdomain)) {
+            $PCloudSubdomain = Read-Host -Prompt "The Privilege Cloud Subdomain is required when using SAML. Please enter it"
+        }
+        $OriginalProgressPreference = $Global:ProgressPreference
+        $Global:ProgressPreference = 'SilentlyContinue'
+        IF (Test-NetConnection -InformationLevel Quiet -Port 443 "$PCloudSubdomain.privilegecloud.cyberark.cloud") {
+            $PCloudTenantAPIURL = "https://$PCloudSubdomain.privilegecloud.cyberark.cloud/PasswordVault/"
+            $Global:ProgressPreference = $OriginalProgressPreference
+        } else {
+            $Global:ProgressPreference = $OriginalProgressPreference
+            Write-LogMessage -type Error -MSG "Error during subdomain validation: Unable to contact https://$PCloudSubdomain.privilegecloud.cyberark.cloud"
+            exit
+        }
+        $AnswerToResponse = Invoke-SAMLLogon $IdaptiveResponse
+    } else {
+        $AnswerToResponse = Invoke-Challenge $IdaptiveResponse
+    }
+
+    If ($AnswerToResponse.success) {
+        #Creating Header
+        If (!$psPASFormat) {
+            $IdentityHeaders = @{Authorization = "Bearer $($AnswerToResponse.Result.Token)" }
+            $IdentityHeaders.Add("X-IDAP-NATIVE-CLIENT", "true")
+        } else {
+            $ExternalVersion = Get-PCloudExternalVersion -PCloudTenantAPIURL $PCloudTenantAPIURL -Token $AnswerToResponse.Result.Token
+            $header = New-Object System.Collections.Generic.Dictionary"[String,string]"
+            $header.add("Authorization", "Bearer $($AnswerToResponse.Result.Token)")
+            $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+            $session.Headers = $header
+            $IdentityHeaders = [PSCustomObject]@{
+                User            = $IdentityUserName
+                BaseURI         = $PCloudTenantAPIURL
+                ExternalVersion = $ExternalVersion
+                WebSession      = $session
+            }
+            $IdentityHeaders.PSObject.TypeNames.Insert(0, 'psPAS.CyberArk.Vault.Session')
+        }
+        Write-LogMessage -type "Verbose" -MSG "IdentityHeaders - $($IdentityHeaders |ConvertTo-Json)"
+        Write-LogMessage -type "Info" -MSG "Identity Token Set Successfully"
+        return $identityHeaders
+    } else {
+        Write-LogMessage -type "Verbose" -MSG "identityHeaders: $($AnswerToResponse|ConvertTo-Json)"
+        Write-LogMessage -type Error -MSG "Error during logon : $($AnswerToResponse.Message)"
+    }
+}
+
+Function Invoke-Challenge {
+    [CmdletBinding()]
+    Param (
+        [Parameter(
+            Mandatory = $true)]
+        [array]$IdaptiveResponse
+    )
+
+    $j = 1
+    ForEach ($challenge in $IdaptiveResponse.Result.Challenges) {
+        #reseting variables
+        $Mechanism = $null
+        $MechanismId = $null
+        $Action = $null
+        $startPlatformAPIAdvancedAuthBody = $null
+        $ChallengeCount = 0
+        $ChallengeCount = $challenge.mechanisms.count
+
+        Write-LogMessage -type "Info" -MSG "Challenge $($j):"
+        #Multi mechanisms option response
+        If ($ChallengeCount -gt 1) {
+            Write-LogMessage -type "Info" -MSG "There are $ChallengeCount options to choose from."
+            $mechanisms = $challenge.mechanisms
+            #Displaying the two options for MFA at this challenge part
+            $i = 1
+            ForEach ($mechanismsOption in $mechanisms) {
+                $mechanismsName = $mechanismsOption.Name
+                $MechanismsMechChosen = $mechanismsOption.PromptMechChosen
+                Write-LogMessage -type "Info" -MSG "$i - is $mechanismsName - $MechanismsMechChosen"
+                $i = $i + 1
+            }
+            #Requesting to know which option the user wants to use
+            $Option = $Null
+            While ($Option -gt $ChallengeCount -or $Option -lt 1 -or $Option -eq $Null) {
+                $Option = Read-Host "Please enter the option number you want to use. from 1-$ChallengeCount"
+                Try {
+                    $Option = [Int]$Option
+                } Catch {
+                    Write-LogMessage -Type Error -MSG $_.ErrorDetails.Message
+                }
+            }
+            #Getting the mechanism
+            $Mechanism = $challenge.mechanisms[$Option - 1] #This is an array so number-1 means the actual position
+            #Completing step of authentication
+            $AnswerToResponse = Invoke-AdvancedAuthBody -SessionId $SessionId -Mechanism $Mechanism -IdentityTenantId $IdentityTenantId
+            Write-LogMessage -type "Verbose" -MSG "AnswerToResponce - $($AnswerToResponse |ConvertTo-Json)"
+        }
+        #One mechanism
+        Else {
+            $Mechanism = $challenge.mechanisms
+            $MechanismName = $Mechanism.Name
+            $MechanismPrmpt = $Mechanism.PromptMechChosen
+            Write-LogMessage -type "Info" -MSG "$MechanismName - $MechanismPrmpt"
+            $AnswerToResponse = Invoke-AdvancedAuthBody -SessionId $SessionId -Mechanism $Mechanism -IdentityTenantId $IdentityTenantId
+            Write-LogMessage -type "Verbose" -MSG "AnswerToResponce - $($AnswerToResponse |ConvertTo-Json)"
+        }
+        #Need Better logic here to make sure that we are done with all the challenges correctly and got next challenge.
+        $j = + 1 #incrementing the challenge number
+    }
+
+    Return $AnswerToResponse
+
+
+
+}
+
+#Runs an advanceAuth API. It will wait in the loop if needed
+Function Invoke-AdvancedAuthBody {
+    [CmdletBinding()]
+    Param (
+        [Parameter(
+            Mandatory = $true,
+            HelpMessage = "Session ID of the mechanism")]
+        [string]$SessionId,
+        [Parameter(
+            Mandatory = $true,
+            HelpMessage = "Mechanism of Authentication")]
+        $Mechanism,
+        [Parameter(
+            Mandatory = $false,
+            HelpMessage = "Tenant ID")]
+        [String]$IdentityTenantId
+    )
+    $MaskList = @("UP")
+    $MechanismId = $Mechanism.MechanismId
+    #need to do this if/elseif as a function so we do not double code here.
+    If ($Mechanism.AnswerType -eq "StartTextOob") {
+        #We got two options here 1 text and one Push notification. We will need to do the while statement in this option.
+        $Action = "StartOOB"
+        $startPlatformAPIAdvancedAuthBody = @{TenantID = $IdentityTenantId; SessionId = $SessionId; MechanismId = $MechanismId; Action = $Action; } | ConvertTo-Json -Compress
+        Write-LogMessage -type "Verbose" -MSG "startPlatformAPIAdvancedAuthBody: $($startPlatformAPIAdvancedAuthBody|ConvertTo-Json -Depth 9)"
+        Write-LogMessage -type "Info" -MSG "Waiting for Push to be pressed"
+    } ElseIf ($Mechanism.AnswerType -eq "Text") {
+        $Action = "Answer"
+        IF (($Mechanism.Name -eq "UP") -and ($InUPCreds)) {
+            Write-Host "Responding with stored credentials"
+            $answer = $UPCreds.Password
+        } else {
+            $Answer = Read-Host "Please enter the answer from the challenge type" -AsSecureString
+        }
+        $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Answer)
+        $startPlatformAPIAdvancedAuthBody = @{TenantID = $IdentityTenantId; SessionId = $SessionId; MechanismId = $MechanismId; Action = $Action; Answer = ([System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)) } | ConvertTo-Json -Compress
+        If ($Mechanism.Name -in $MaskList) {
+            Write-LogMessage -type "Verbose" -MSG "startPlatformAPIAdvancedAuthBody: $($startPlatformAPIAdvancedAuthBody|ConvertTo-Json -Depth 9))" -maskAnswer
+        } Else {
+            Write-LogMessage -type "Verbose" -MSG "startPlatformAPIAdvancedAuthBody: $($startPlatformAPIAdvancedAuthBody|ConvertTo-Json -Depth 9))"
+        }
+    }
+    #Rest API
+    Try {
+        $AnswerToResponse = Invoke-RestMethod -Uri $startPlatformAPIAdvancedAuth -Method Post -ContentType "application/json" -Body $startPlatformAPIAdvancedAuthBody -TimeoutSec 30
+        Write-LogMessage -type "Verbose" -MSG "AnswerToResponse: $($AnswerToResponse|ConvertTo-Json)"
+    } Catch {
+        Write-LogMessage -Type Error -MSG $_.ErrorDetails.Message
+    }
+    while ($AnswerToResponse.Result.Summary -eq "OobPending") {
+        Start-Sleep -Seconds 2
+        $pollBody = @{TenantID = $IdentityTenantId; SessionId = $SessionId; MechanismId = $MechanismId; Action = "Poll"; } | ConvertTo-Json -Compress
+        Write-LogMessage -type "Verbose" -MSG "pollBody: $($pollBody|ConvertTo-Json)"
+        $AnswerToResponse = Invoke-RestMethod -Uri $startPlatformAPIAdvancedAuth -Method Post -ContentType "application/json" -Body $pollBody -TimeoutSec 30
+        Write-LogMessage -type "Verbose" -MSG "AnswerToResponse: $($AnswerToResponse|ConvertTo-Json)"
+        Write-LogMessage -type "Info" -MSG "$($AnswerToResponse.Result.Summary)"
+    }
+    $AnswerToResponse
+}
+
+function Get-PCloudExternalVersion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $PCloudTenantApiUrl,
+        [Parameter(Mandatory = $true)]
+        $Token
+    )
+
+    $ExternalVersion = "12.6.0"
+    try {
+        $Headers = @{
+            Authorization = "Bearer $Token"
+        }
+        $Response = Invoke-RestMethod -Method GET -Uri "$PCloudTenantApiUrl/WebServices/PIMServices.svc/Server" -Headers $Headers -ContentType 'application/json'
+        $ExternalVersion = $Response.ExternalVersion
+    } catch {
+        Write-LogMessage -Type Error -MSG $_.ErrorDetails.Message
+    }
+
+    $ExternalVersion
+}
+
+
+function Invoke-SAMLLogon {
+
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [Array] $IdaptiveResponse
+    )
+
+    Begin {
+
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Web
+
+        #Special thanks to Shay Tevet for his assistance on this section
+        $source = @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+namespace Cookies
+{
+    public static class getter
+    {
+       [DllImport("wininet.dll", CharSet=CharSet.None, ExactSpelling=false, SetLastError=true)]
+        public static extern bool InternetGetCookieEx(string url, string cookieName, StringBuilder cookieData, ref int size, int dwFlags, IntPtr lpReserved);
+
+	public static string GetUriCookieContainer(String uri)
+        {
+            string str;
+            try
+            {
+                int num = 131072;
+                StringBuilder stringBuilder = new StringBuilder(num);
+                if (!InternetGetCookieEx(uri, null, stringBuilder, ref num, 8192, IntPtr.Zero))
+                {
+                        str = null;
+                        return str;
+                }
+                str = (!stringBuilder.ToString().Contains("idToken-") ? "Error" : stringBuilder.ToString().Split(new string[] { "idToken-" }, StringSplitOptions.None)[1].Split(new char[] { ';' })[0].Split(new char[] { '=' })[1]);
+            }
+            catch
+            {
+                str = "Error";
+            }
+            return str;
+        }
+    }
+}
+"@
+
+        $compilerParameters = New-Object System.CodeDom.Compiler.CompilerParameters
+        $compilerParameters.CompilerOptions = "/unsafe"
+
+        Add-Type -TypeDefinition $source -Language CSharp -CompilerParameters $compilerParameters
+
+        $PCloudURL = "https://$PCloudSubdomain.cyberark.cloud"
+        $PCloudPortalURL = "$PCloudURL/privilegecloud/"
+        $logonURL = "$IdaptiveBasePlatformURL/login?redirectUrl=https%3A%2F%2F$PCloudSubdomain.cyberark.cloud%2Fprivilegecloud&username=$IdentityUserName&iwa=false&iwaSsl=false"
+
+    }
+
+    Process {
+        $DocComp = {
+
+            if ($web.Url.AbsoluteUri -like "*/privilegecloud" -and $web.document.Cookie -like "*loggedIn-*") {
+                $Global:Auth = [cookies.getter]::GetUriCookieContainer("$PCloudURL").ToString()
+                $form.Close()
+            }
+        }
+
+
+        # create window for embedded browser
+        $form = New-Object Windows.Forms.Form
+        $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+        $form.Width = 640
+        $form.Height = 700
+        $form.showIcon = $false
+        $form.TopMost = $false
+        $form.Text = "SAML Based Authentication"
+
+        $web = New-Object Windows.Forms.WebBrowser
+        $web.Size = $form.ClientSize
+        $web.Anchor = "Left,Top,Right,Bottom"
+        $web.ScriptErrorsSuppressed = $false
+        $web.AllowWebBrowserDrop = $false
+        $web.IsWebBrowserContextMenuEnabled = $true
+        $web.Add_DocumentCompleted($DocComp)
+        $form.Controls.Add($web)
+
+        $web.Navigate(("$logonURL"))
+
+        # show browser window, waits for window to close
+        if ([system.windows.forms.application]::run($form) -ne "OK") {
+
+            if ($null -ne $auth) {
+                [PSCustomObject]$Return = @{
+                    Success = $true
+                    Result  = @{
+                        Token = $auth
+                    }
+                }
+                return $Return
+                $form.Close()
+            } Else {
+                throw "Unable to get auth token"
+            }
+        }
+
+        End {
+            $form.Dispose()
+        }
+    }
+}
 # SIG # Begin signature block
-# MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIIqRQYJKoZIhvcNAQcCoIIqNjCCKjICAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBox3jyiLkx6C7D
-# iZDuPKgQ7hVqpN/5nPwKmLiM+w+I1qCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDHGdHtyYUZydGF
+# L3TkQo7qFRFLt8HyLFiFsQIeYp6o3aCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -151,97 +608,97 @@ Param
 # oZ6wZE9s0guXjXwwWfgQ9BSrEHnVIyKEhzKq7r7eo6VyjwOzLXLSALQdzH66cNk+
 # w3yT6uG543Ydes+QAnZuwQl3tp0/LjbcUpsDttEI5zp1Y4UfU4YA18QbRGPD1F9y
 # wjzg6QqlDtFeV2kohxa5pgyV9jOyX4/x0mu74qADxWHsZNVvlRLMUZ4zI4y3KvX8
-# vZsjJFVKIsvyCgyXgNMM5Z4xghFFMIIRQQIBATBsMFwxCzAJBgNVBAYTAkJFMRkw
+# vZsjJFVKIsvyCgyXgNMM5Z4xghFEMIIRQAIBATBsMFwxCzAJBgNVBAYTAkJFMRkw
 # FwYDVQQKExBHbG9iYWxTaWduIG52LXNhMTIwMAYDVQQDEylHbG9iYWxTaWduIEdD
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIEqAlJO2vPRtYD5uPTQ20O2MGHTx32cp7t3w/2NKTGWkMA0GCSqGSIb3
-# DQEBAQUABIICAHQOcUBVc3NGWGD5vWesGFq+8jsU6MBNztL1WWIT25oL7LQaJ884
-# UP8JnhcneAr1psitImtoZHfztpTHdc5yhlYg+/KQj/axQcNEbfJiAtNTQvsoBFyd
-# LWxfqwSDtvVYWEcYmq+SUOPD9OAOhj8P+o10rVO8GPdpvPetjC98sb7xNssppYk+
-# ZTOkKZ18+iJ1KXjk/Rf9kcTACR7sev6nruMmV5mWkkqJFktCOVzyO85OYct2sjAA
-# IRu4zStco28tYeXXZVCYjMxkRtV1al18XUqPZPCORiWmuJgaaM0t1lXtrChnO0UV
-# MQjOCgzYt43uSgRketReoL3ilNgbvf+vof9R2SJeMWIVuJRjp7YUTEBVYjWQD4fo
-# CmSfg6LtTunEou1OxLIxZkVtv+pJREtuQ4qiulyQ39001b/6cnzZbEjXX02vCvq0
-# 363/9Pl7uC2ok01Xn0Eif4EEyUh1x84UY6waRbcjHuZgYatQ1N4qF9NiXo+bm32I
-# f6HPeA5sCM5GEHGiiWSqN61AiEMNTv4kBo10GA+chSUz/piZBHgwsvIk8vmtoxVK
-# VYNKERwaaufgqpIMnqjiDe2ECR+GXepQVsDQG3RQ7g6F4dHiAjaZc4YaU6ixrtif
-# VQkAxr7EbsM1vrwp9LVam1wPMDN/wLM7VHlz5BmOu68BOih0hFwTElxkoYIOLDCC
-# DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
-# BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFJ/NfwePb/fvRqKIvpM9oU1EXt3KAhUAnah0U+4w
-# 9jp3gMv5W9fYRt+FjlAYDzIwMjQwMjAxMDcwNzI2WjADAgEeoIGGpIGDMIGAMQsw
-# CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
-# BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
-# QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
-# ewWx1EloUUT3yYnSnBmdEjANBgkqhkiG9w0BAQsFADCBvTELMAkGA1UEBhMCVVMx
-# FzAVBgNVBAoTDlZlcmlTaWduLCBJbmMuMR8wHQYDVQQLExZWZXJpU2lnbiBUcnVz
-# dCBOZXR3b3JrMTowOAYDVQQLEzEoYykgMjAwOCBWZXJpU2lnbiwgSW5jLiAtIEZv
-# ciBhdXRob3JpemVkIHVzZSBvbmx5MTgwNgYDVQQDEy9WZXJpU2lnbiBVbml2ZXJz
-# YWwgUm9vdCBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTAeFw0xNjAxMTIwMDAwMDBa
-# Fw0zMTAxMTEyMzU5NTlaMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRl
-# YyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazEo
-# MCYGA1UEAxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQTCCASIwDQYJ
-# KoZIhvcNAQEBBQADggEPADCCAQoCggEBALtZnVlVT52Mcl0agaLrVfOwAa08cawy
-# jwVrhponADKXak3JZBRLKbvC2Sm5Luxjs+HPPwtWkPhiG37rpgfi3n9ebUA41JEG
-# 50F8eRzLy60bv9iVkfPw7mz4rZY5Ln/BJ7h4OcWEpe3tr4eOzo3HberSmLU6Hx45
-# ncP0mqj0hOHE0XxxxgYptD/kgw0mw3sIPk35CrczSf/KO9T1sptL4YiZGvXA6TMU
-# 1t/HgNuR7v68kldyd/TNqMz+CfWTN76ViGrF3PSxS9TO6AmRX7WEeTWKeKwZMo8j
-# wTJBG1kOqT6xzPnWK++32OTVHW0ROpL2k8mc40juu1MO1DaXhnjFoTcCAwEAAaOC
-# AXcwggFzMA4GA1UdDwEB/wQEAwIBBjASBgNVHRMBAf8ECDAGAQH/AgEAMGYGA1Ud
-# IARfMF0wWwYLYIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0cHM6Ly9kLnN5
-# bWNiLmNvbS9jcHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5bWNiLmNvbS9y
-# cGEwLgYIKwYBBQUHAQEEIjAgMB4GCCsGAQUFBzABhhJodHRwOi8vcy5zeW1jZC5j
-# b20wNgYDVR0fBC8wLTAroCmgJ4YlaHR0cDovL3Muc3ltY2IuY29tL3VuaXZlcnNh
-# bC1yb290LmNybDATBgNVHSUEDDAKBggrBgEFBQcDCDAoBgNVHREEITAfpB0wGzEZ
-# MBcGA1UEAxMQVGltZVN0YW1wLTIwNDgtMzAdBgNVHQ4EFgQUr2PWyqNOhXLgp7xB
-# 8ymiOH+AdWIwHwYDVR0jBBgwFoAUtnf6aUhHn1MS1cLqBzJ2B9GXBxkwDQYJKoZI
-# hvcNAQELBQADggEBAHXqsC3VNBlcMkX+DuHUT6Z4wW/X6t3cT/OhyIGI96ePFeZA
-# Ka3mXfSi2VZkhHEwKt0eYRdmIFYGmBmNXXHy+Je8Cf0ckUfJ4uiNA/vMkC/WCmxO
-# M+zWtJPITJBjSDlAIcTd1m6JmDy1mJfoqQa3CcmPU1dBkC/hHk1O3MoQeGxCbvC2
-# xfhhXFL1TvZrjfdKer7zzf0D19n2A6gP41P3CnXsxnUuqmaFBJm3+AZX4cYO9uiv
-# 2uybGB+queM6AL/OipTLAduexzi7D1Kr0eOUA2AKTaD+J20UMvw/l0Dhv5mJ2+Q5
-# FL3a5NPD6itas5VYVQR9x5rsIwONhSrS/66pYYEwggVLMIIEM6ADAgECAhB71OWv
-# uswHP6EBIwQiQU0SMA0GCSqGSIb3DQEBCwUAMHcxCzAJBgNVBAYTAlVTMR0wGwYD
-# VQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1
-# c3QgTmV0d29yazEoMCYGA1UEAxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGlu
-# ZyBDQTAeFw0xNzEyMjMwMDAwMDBaFw0yOTAzMjIyMzU5NTlaMIGAMQswCQYDVQQG
-# EwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5
-# bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNIQTI1NiBU
-# aW1lU3RhbXBpbmcgU2lnbmVyIC0gRzMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAw
-# ggEKAoIBAQCvDoqq+Ny/aXtUF3FHCb2NPIH4dBV3Z5Cc/d5OAp5LdvblNj5l1SQg
-# bTD53R2D6T8nSjNObRaK5I1AjSKqvqcLG9IHtjy1GiQo+BtyUT3ICYgmCDr5+kMj
-# dUdwDLNfW48IHXJIV2VNrwI8QPf03TI4kz/lLKbzWSPLgN4TTfkQyaoKGGxVYVfR
-# 8QIsxLWr8mwj0p8NDxlsrYViaf1OhcGKUjGrW9jJdFLjV2wiv1V/b8oGqz9KtyJ2
-# ZezsNvKWlYEmLP27mKoBONOvJUCbCVPwKVeFWF7qhUhBIYfl3rTTJrJ7QFNYeY5S
-# MQZNlANFxM48A+y3API6IsW0b+XvsIqbAgMBAAGjggHHMIIBwzAMBgNVHRMBAf8E
-# AjAAMGYGA1UdIARfMF0wWwYLYIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0
-# cHM6Ly9kLnN5bWNiLmNvbS9jcHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5
-# bWNiLmNvbS9ycGEwQAYDVR0fBDkwNzA1oDOgMYYvaHR0cDovL3RzLWNybC53cy5z
-# eW1hbnRlYy5jb20vc2hhMjU2LXRzcy1jYS5jcmwwFgYDVR0lAQH/BAwwCgYIKwYB
-# BQUHAwgwDgYDVR0PAQH/BAQDAgeAMHcGCCsGAQUFBwEBBGswaTAqBggrBgEFBQcw
-# AYYeaHR0cDovL3RzLW9jc3Aud3Muc3ltYW50ZWMuY29tMDsGCCsGAQUFBzAChi9o
-# dHRwOi8vdHMtYWlhLndzLnN5bWFudGVjLmNvbS9zaGEyNTYtdHNzLWNhLmNlcjAo
-# BgNVHREEITAfpB0wGzEZMBcGA1UEAxMQVGltZVN0YW1wLTIwNDgtNjAdBgNVHQ4E
-# FgQUpRMBqZ+FzBtuFh5fOzGqeTYAex0wHwYDVR0jBBgwFoAUr2PWyqNOhXLgp7xB
-# 8ymiOH+AdWIwDQYJKoZIhvcNAQELBQADggEBAEaer/C4ol+imUjPqCdLIc2yuaZy
-# cGMv41UpezlGTud+ZQZYi7xXipINCNgQujYk+gp7+zvTYr9KlBXmgtuKVG3/KP5n
-# z3E/5jMJ2aJZEPQeSv5lzN7Ua+NSKXUASiulzMub6KlN97QXWZJBw7c/hub2wH9E
-# PEZcF1rjpDvVaSbVIX3hgGd+Yqy3Ti4VmuWcI69bEepxqUH5DXk4qaENz7Sx2j6a
-# escixXTN30cJhsT8kSWyG5bphQjo3ep0YG5gpVZ6DchEWNzm+UgUnuW/3gC9d7GY
-# FHIUJN/HESwfAD/DSxTGZxzMHgajkF9cVIs+4zNbgg/Ft4YCTnGf6WZFP3YxggJa
-# MIICVgIBATCBizB3MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29y
-# cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
-# BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
-# BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjAxMDcwNzI2WjAvBgkqhkiG9w0BCQQxIgQg
-# 6XZ1faqrQYfXQoVf+rt9JBvu5aalkOsM8hAFKEctG9MwNwYLKoZIhvcNAQkQAi8x
-# KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAEtgiXHR9g62v2vAB2ItiPKJBQdBsJBSku8+rVTLYdrve//VoNog
-# T082ZCKGRzicgbYqR3c77AX5Ixjxf6S5rimwqfQBQfvm/CcEAVUKFIuO6qEdaEwa
-# cJLKkKzMpnOlkkTUxa8HXf/mo+QtiVDPVU0a6O5NqKnqqd+NWs6JtbkIGcVl3+E7
-# bAdOFyd/OUvoXEwIbbf+LHOWGmlZuILJZ0BDG9srzMfNwR1h9kSm3YDNWNdwffL8
-# Mbf4fcEqKWZeN4Lz8l81sAq9/QNYnz0dRBauArl1Cc69yL6m3dQ2HpFJ0HskyEsl
-# AzxJ52FMmNzQrR9XnoGT8L5wRV9du83/Sso=
+# AQkEMSIEILUz4z7+Ax1HsTD6X3qUfbUHXCXufnyeD1SpltbcKOdQMA0GCSqGSIb3
+# DQEBAQUABIICAJZTKsf4m7LhM39tdUHmFqeH0WDM+c/fxjfSuW2zV3o+kNEJjhY/
+# jKl6bxFNfBFlx+gEUlms6uutzR6Gflwlr2tigTdcEyEtgEIhQkJ7V77ulzo9iP+u
+# jdEtE5Ea1lPO7IsYuw2JqTCGCNe5cI0UjqeMNk/Cd0TtztO4dVOovO6O+BNlw0KI
+# JKOCRceItdNk4mi/WkSTHR/s7yhZI7uCsSjwtHlHzbsU+ifBwuedwyQT9S++5Szi
+# GPOEjyEHQantVIEgrCBR7P9zJ/FX4gA4T2svZFRydf7nY/bDUTrwtXuXn7l6c+a9
+# q1YSS0DZRE8hDaTn48zhmAbXeF1zCRp3k+8ER5REmWhBd5IP4vYpmgXA7WXGKOGq
+# wwol0T0GYz9GFVhbVEAc1smfpefc3N2Fr9YTRJZN5gyTNaY/txJGJkn8pgnE95qZ
+# Fjo2iDD0mOxJPiZoD09LGTjT7P0OeusewWzxblSGdd6stmxYPXRtQAxoYqUDGnbg
+# RPqllYRwOACgMsMon28BwQmmuxh04f4rjGtxGO0W2Niw9vUqc4K9+O8b9o/euf4B
+# /CAj9aVpmTbZi21txHkrYrUeATxPOtUnTcAkVRRu2loaXCvpui00x/V5VD7S4WFh
+# K7SvE/eEXOKsIIyZz2JoT61sErqCR3vGdz/d296+vniQOSNK0LDtVbc4oYIOKzCC
+# DicGCisGAQQBgjcDAwExgg4XMIIOEwYJKoZIhvcNAQcCoIIOBDCCDgACAQMxDTAL
+# BglghkgBZQMEAgEwgf4GCyqGSIb3DQEJEAEEoIHuBIHrMIHoAgEBBgtghkgBhvhF
+# AQcXAzAhMAkGBSsOAwIaBQAEFL5YPMty9WYnO4HQBWmV+dy+q4/oAhQM+9YYHheK
+# qLtN7LOVuEhGqISG0BgPMjAyNDAzMDcyMzAyNDJaMAMCAR6ggYakgYMwgYAxCzAJ
+# BgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UE
+# CxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazExMC8GA1UEAxMoU3ltYW50ZWMgU0hB
+# MjU2IFRpbWVTdGFtcGluZyBTaWduZXIgLSBHM6CCCoswggU4MIIEIKADAgECAhB7
+# BbHUSWhRRPfJidKcGZ0SMA0GCSqGSIb3DQEBCwUAMIG9MQswCQYDVQQGEwJVUzEX
+# MBUGA1UEChMOVmVyaVNpZ24sIEluYy4xHzAdBgNVBAsTFlZlcmlTaWduIFRydXN0
+# IE5ldHdvcmsxOjA4BgNVBAsTMShjKSAyMDA4IFZlcmlTaWduLCBJbmMuIC0gRm9y
+# IGF1dGhvcml6ZWQgdXNlIG9ubHkxODA2BgNVBAMTL1ZlcmlTaWduIFVuaXZlcnNh
+# bCBSb290IENlcnRpZmljYXRpb24gQXV0aG9yaXR5MB4XDTE2MDExMjAwMDAwMFoX
+# DTMxMDExMTIzNTk1OVowdzELMAkGA1UEBhMCVVMxHTAbBgNVBAoTFFN5bWFudGVj
+# IENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1hbnRlYyBUcnVzdCBOZXR3b3JrMSgw
+# JgYDVQQDEx9TeW1hbnRlYyBTSEEyNTYgVGltZVN0YW1waW5nIENBMIIBIjANBgkq
+# hkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1mdWVVPnYxyXRqBoutV87ABrTxxrDKP
+# BWuGmicAMpdqTclkFEspu8LZKbku7GOz4c8/C1aQ+GIbfuumB+Lef15tQDjUkQbn
+# QXx5HMvLrRu/2JWR8/DubPitljkuf8EnuHg5xYSl7e2vh47Ojcdt6tKYtTofHjmd
+# w/SaqPSE4cTRfHHGBim0P+SDDSbDewg+TfkKtzNJ/8o71PWym0vhiJka9cDpMxTW
+# 38eA25Hu/rySV3J39M2ozP4J9ZM3vpWIasXc9LFL1M7oCZFftYR5NYp4rBkyjyPB
+# MkEbWQ6pPrHM+dYr77fY5NUdbRE6kvaTyZzjSO67Uw7UNpeGeMWhNwIDAQABo4IB
+# dzCCAXMwDgYDVR0PAQH/BAQDAgEGMBIGA1UdEwEB/wQIMAYBAf8CAQAwZgYDVR0g
+# BF8wXTBbBgtghkgBhvhFAQcXAzBMMCMGCCsGAQUFBwIBFhdodHRwczovL2Quc3lt
+# Y2IuY29tL2NwczAlBggrBgEFBQcCAjAZGhdodHRwczovL2Quc3ltY2IuY29tL3Jw
+# YTAuBggrBgEFBQcBAQQiMCAwHgYIKwYBBQUHMAGGEmh0dHA6Ly9zLnN5bWNkLmNv
+# bTA2BgNVHR8ELzAtMCugKaAnhiVodHRwOi8vcy5zeW1jYi5jb20vdW5pdmVyc2Fs
+# LXJvb3QuY3JsMBMGA1UdJQQMMAoGCCsGAQUFBwMIMCgGA1UdEQQhMB+kHTAbMRkw
+# FwYDVQQDExBUaW1lU3RhbXAtMjA0OC0zMB0GA1UdDgQWBBSvY9bKo06FcuCnvEHz
+# KaI4f4B1YjAfBgNVHSMEGDAWgBS2d/ppSEefUxLVwuoHMnYH0ZcHGTANBgkqhkiG
+# 9w0BAQsFAAOCAQEAdeqwLdU0GVwyRf4O4dRPpnjBb9fq3dxP86HIgYj3p48V5kAp
+# reZd9KLZVmSEcTAq3R5hF2YgVgaYGY1dcfL4l7wJ/RyRR8ni6I0D+8yQL9YKbE4z
+# 7Na0k8hMkGNIOUAhxN3WbomYPLWYl+ipBrcJyY9TV0GQL+EeTU7cyhB4bEJu8LbF
+# +GFcUvVO9muN90p6vvPN/QPX2fYDqA/jU/cKdezGdS6qZoUEmbf4Blfhxg726K/a
+# 7JsYH6q54zoAv86KlMsB257HOLsPUqvR45QDYApNoP4nbRQy/D+XQOG/mYnb5DkU
+# vdrk08PqK1qzlVhVBH3HmuwjA42FKtL/rqlhgTCCBUswggQzoAMCAQICEHvU5a+6
+# zAc/oQEjBCJBTRIwDQYJKoZIhvcNAQELBQAwdzELMAkGA1UEBhMCVVMxHTAbBgNV
+# BAoTFFN5bWFudGVjIENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1hbnRlYyBUcnVz
+# dCBOZXR3b3JrMSgwJgYDVQQDEx9TeW1hbnRlYyBTSEEyNTYgVGltZVN0YW1waW5n
+# IENBMB4XDTE3MTIyMzAwMDAwMFoXDTI5MDMyMjIzNTk1OVowgYAxCzAJBgNVBAYT
+# AlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3lt
+# YW50ZWMgVHJ1c3QgTmV0d29yazExMC8GA1UEAxMoU3ltYW50ZWMgU0hBMjU2IFRp
+# bWVTdGFtcGluZyBTaWduZXIgLSBHMzCCASIwDQYJKoZIhvcNAQEBBQADggEPADCC
+# AQoCggEBAK8Oiqr43L9pe1QXcUcJvY08gfh0FXdnkJz93k4Cnkt29uU2PmXVJCBt
+# MPndHYPpPydKM05tForkjUCNIqq+pwsb0ge2PLUaJCj4G3JRPcgJiCYIOvn6QyN1
+# R3AMs19bjwgdckhXZU2vAjxA9/TdMjiTP+UspvNZI8uA3hNN+RDJqgoYbFVhV9Hx
+# AizEtavybCPSnw0PGWythWJp/U6FwYpSMatb2Ml0UuNXbCK/VX9vygarP0q3InZl
+# 7Ow28paVgSYs/buYqgE4068lQJsJU/ApV4VYXuqFSEEhh+XetNMmsntAU1h5jlIx
+# Bk2UA0XEzjwD7LcA8joixbRv5e+wipsCAwEAAaOCAccwggHDMAwGA1UdEwEB/wQC
+# MAAwZgYDVR0gBF8wXTBbBgtghkgBhvhFAQcXAzBMMCMGCCsGAQUFBwIBFhdodHRw
+# czovL2Quc3ltY2IuY29tL2NwczAlBggrBgEFBQcCAjAZGhdodHRwczovL2Quc3lt
+# Y2IuY29tL3JwYTBABgNVHR8EOTA3MDWgM6Axhi9odHRwOi8vdHMtY3JsLndzLnN5
+# bWFudGVjLmNvbS9zaGEyNTYtdHNzLWNhLmNybDAWBgNVHSUBAf8EDDAKBggrBgEF
+# BQcDCDAOBgNVHQ8BAf8EBAMCB4AwdwYIKwYBBQUHAQEEazBpMCoGCCsGAQUFBzAB
+# hh5odHRwOi8vdHMtb2NzcC53cy5zeW1hbnRlYy5jb20wOwYIKwYBBQUHMAKGL2h0
+# dHA6Ly90cy1haWEud3Muc3ltYW50ZWMuY29tL3NoYTI1Ni10c3MtY2EuY2VyMCgG
+# A1UdEQQhMB+kHTAbMRkwFwYDVQQDExBUaW1lU3RhbXAtMjA0OC02MB0GA1UdDgQW
+# BBSlEwGpn4XMG24WHl87Map5NgB7HTAfBgNVHSMEGDAWgBSvY9bKo06FcuCnvEHz
+# KaI4f4B1YjANBgkqhkiG9w0BAQsFAAOCAQEARp6v8LiiX6KZSM+oJ0shzbK5pnJw
+# Yy/jVSl7OUZO535lBliLvFeKkg0I2BC6NiT6Cnv7O9Niv0qUFeaC24pUbf8o/mfP
+# cT/mMwnZolkQ9B5K/mXM3tRr41IpdQBKK6XMy5voqU33tBdZkkHDtz+G5vbAf0Q8
+# RlwXWuOkO9VpJtUhfeGAZ35irLdOLhWa5Zwjr1sR6nGpQfkNeTipoQ3PtLHaPpp6
+# xyLFdM3fRwmGxPyRJbIblumFCOjd6nRgbmClVnoNyERY3Ob5SBSe5b/eAL13sZgU
+# chQk38cRLB8AP8NLFMZnHMweBqOQX1xUiz7jM1uCD8W3hgJOcZ/pZkU/djGCAlow
+# ggJWAgEBMIGLMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jw
+# b3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazEoMCYGA1UE
+# AxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQQIQe9Tlr7rMBz+hASME
+# IkFNEjALBglghkgBZQMEAgGggaQwGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEE
+# MBwGCSqGSIb3DQEJBTEPFw0yNDAzMDcyMzAyNDJaMC8GCSqGSIb3DQEJBDEiBCDR
+# AMpoBJSGRyR9q8si5FzFJMzc1XvUCwS7ZQmrt2whGTA3BgsqhkiG9w0BCRACLzEo
+# MCYwJDAiBCDEdM52AH0COU4NpeTefBTGgPniggE8/vZT7123H99h+DALBgkqhkiG
+# 9w0BAQEEggEATXATEDxbEEDK1hc27ULuJkcTc2alE6MJwHfjwrxC6R8UXosCRKh4
+# 85edxi4gh0pRLwULw5DDL22oP+Cq+87u1+Iu5mDY4DlqEkHwLF8CH/j/FIAG/b2k
+# mizOz/SEVN3duCeET4WvGr2MntXSZ6rbmJJXJ/sY/Z2Iz07kYf9Is3Mdtz+KYAIJ
+# /ptunhR7HyY/55I0aunw+NPHud8hMOUY6MCyrpO2DtNGJtG4+cPYmLuX559kygLs
+# qkZo0IefGtwu1dnwxvyXIp+tH1UIXMYjcjlkk/tyuIJRRNMJgrxSnhvcp+pzLFJh
+# CO+0CjRJ9lAPUXgesVbfMbvUEpqaITBghQ==
 # SIG # End signature block
