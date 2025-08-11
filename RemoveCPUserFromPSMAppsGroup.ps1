@@ -523,7 +523,7 @@ Set-PVWAURL -AuthType cyberark
 Invoke-Logon
 
 
-$getPSMGroup = Invoke-RestMethod -Uri "$($URL_UsersGroups)?filter=groupName eq PSMApps&includeMembers eq true" -Method Get -Headers $s_pvwaLogonHeader -ErrorVariable pvwaERR
+$getPSMGroup = Invoke-RestMethod -Uri "$($URL_UsersGroups)?filter=groupName eq PSMAppUsers&includeMembers eq true" -Method Get -Headers $s_pvwaLogonHeader -ErrorVariable pvwaERR
 
 write-host "Group ID: $($getPSMGroup.value.id)"
 
@@ -592,5 +592,6 @@ if (@($filterMembers).Count -gt 0) {
         Write-Host 'Deletion canceled.' -ForegroundColor Yellow
     }
 }
+
 
 Invoke-Logoff
