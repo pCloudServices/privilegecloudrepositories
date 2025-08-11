@@ -36,25 +36,6 @@ $OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = New-Obj
 # =================================================================================================================================
 Function Write-LogMessage
 {
-    <# 
-.SYNOPSIS 
-	Method to log a message on screen and in a log file
-.DESCRIPTION
-	Logging The input Message to the Screen and the Log File. 
-	The Message Type is presented in colours on the screen based on the type
-.PARAMETER LogFile
-	The Log File to write to. By default using the LOG_FILE_PATH
-.PARAMETER MSG
-	The message to log
-.PARAMETER Header
-	Adding a header line before the message
-.PARAMETER SubHeader
-	Adding a Sub header line before the message
-.PARAMETER Footer
-	Adding a footer line after the message
-.PARAMETER Type
-	The type of the message to log (Info, Warning, Error, Debug)
-#>
     param(
         [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
         [AllowEmptyString()]
@@ -77,7 +58,6 @@ Function Write-LogMessage
     {
         If ([string]::IsNullOrEmpty($LogFile) -and $WriteLog)
         {
-            # User wanted to write logs, but did not provide a log file - Create a temporary file
             $LogFile = Join-Path -Path $ENV:Temp -ChildPath "$((Get-Date).ToShortDateString().Replace('/','_')).log"
             Write-Host "No log file path inputted, created a temporary file at: '$LogFile'"
         }
@@ -91,12 +71,8 @@ Function Write-LogMessage
             "------------------------------------" | Out-File -Append -FilePath $LogFile 
             Write-Host "------------------------------------" -ForegroundColor Magenta
         }
-		
-        # Replace empty message with 'N/A'
         if ([string]::IsNullOrEmpty($Msg)) { $Msg = "N/A" }
         $msgToWrite = ""
-		
-        # Mask Passwords
         $maskingPattern = '(?:(?:["\s\/\\](secret|NewCredentials|credentials|answer)(?!s))\s{0,}["\:= ]{1,}\s{0,}["]{0,})(?=([\w`~!@#$%^&*()\-_\=\+\\\/\|\,\;\:\.\[\]\{\}]+))'
         $maskingResult = $Msg | Select-String $maskingPattern -AllMatches
         if ($maskingResult.Matches.Count -gt 0)
@@ -105,7 +81,6 @@ Function Write-LogMessage
             {
                 if ($item.Success)
                 {
-                    # Avoid replacing a single comma, space or semi-colon 
                     if ($item.Groups[2].Value -NotMatch '^(,| |;)$')
                     {
                         $Msg = $Msg.Replace($item.Groups[2].Value, "****")
@@ -113,7 +88,6 @@ Function Write-LogMessage
                 }
             }
         }
-        # Check the message type
         switch ($type)
         {
             { ($_ -eq "Info") -or ($_ -eq "LogOnly") } 
@@ -182,77 +156,22 @@ Function Write-LogMessage
     }
 }
 
-# @FUNCTION@ ======================================================================================================================
-# Name...........: Join-ExceptionMessage
-# Description....: Formats exception messages
-# Parameters.....: Exception
-# Return Values..: Formatted String of Exception messages
-# =================================================================================================================================
-Function Join-ExceptionMessage
-{
-    <#
-.SYNOPSIS
-	Formats exception messages
-.DESCRIPTION
-	Formats exception messages
-.PARAMETER Exception
-	The Exception object to format
-#>
-    param(
-        [Exception]$e
-    )
-
-    Begin
-    {
-    }
-    Process
-    {
-        $msg = "Source:{0}; Message: {1}" -f $e.Source, $e.Message
-        while ($e.InnerException)
-        {
-            $e = $e.InnerException
-            $msg += "`n`t->Source:{0}; Message: {1}" -f $e.Source, $e.Message
-        }
-        return $msg
-    }
-    End
-    {
-    }
+Function Join-ExceptionMessage { param([Exception]$e)
+    $msg = "Source:{0}; Message: {1}" -f $e.Source, $e.Message
+    while ($e.InnerException) { $e = $e.InnerException; $msg += "`n`t->Source:{0}; Message: {1}" -f $e.Source, $e.Message }
+    return $msg
 }
 
-Function Collect-ExceptionMessage {
-    param(
-        [Exception]$e
-    )
-
-    Begin {
-    }
-
-    Process {
-        $msg = "Source: {0}; Message: {1}" -f $e.Source, $e.Message
-        while ($e.InnerException) {
-            $e = $e.InnerException
-            $msg += "`n`tSource: {0}; Message: {1}" -f $e.Source, $e.Message
-        }
-        return $msg
-    }
-
-    End {
-    }
+Function Collect-ExceptionMessage { param([Exception]$e)
+    $msg = "Source: {0}; Message: {1}" -f $e.Source, $e.Message
+    while ($e.InnerException) { $e = $e.InnerException; $msg += "`n`tSource: {0}; Message: {1}" -f $e.Source, $e.Message }
+    return $msg
 }
-
 #endregion
 
 #region REST Logon
-# @FUNCTION@ ======================================================================================================================
-# Name...........: IgnoreCertErrors
-# Description....: Sets TLS 1.2 and Ignore Cert errors.
-# Parameters.....: None
-# Return Values..: 
-# =================================================================================================================================
 Function IgnoreCertErrors()
 {
-    #Ignore certificate error
     if (-not ([System.Management.Automation.PSTypeName]'ServerCertificateValidationCallback').Type)
     {
         $certCallback = @"
@@ -284,107 +203,41 @@ Function IgnoreCertErrors()
         Add-Type $certCallback
     }
     [ServerCertificateValidationCallback]::Ignore()
-    #ERROR: The request was aborted: Could not create SSL/TLS secure channel.
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 }
 
-# @FUNCTION@ ======================================================================================================================
-# Name...........: Get-LogonHeader
-# Description....: Login to PVWA and return logonHeader
-# Parameters.....: Credentials
-# Return Values..: 
-# =================================================================================================================================
 Function Get-LogonHeader
 {
-    <#
-    .SYNOPSIS
-        Get-LogonHeader
-    .DESCRIPTION
-        Get-LogonHeader
-    .PARAMETER Credentials
-        The REST API Credentials to authenticate
-    #>
-    param(
-        [Parameter(Mandatory = $true)]
-        [PSCredential]$Credentials
-    )
-    
-    # Create the POST Body for the Logon
-    # ----------------------------------
+    param([Parameter(Mandatory = $true)][PSCredential]$Credentials)
     $logonBody = @{ username = $Credentials.username.Replace('\', ''); password = $Credentials.GetNetworkCredential().password } | ConvertTo-Json -Compress
-            
-    try
-    {
-        # Logon
+    try {
         $logonToken = Invoke-RestMethod -Method Post -Uri $URL_PVWALogon -Body $logonBody -ContentType "application/json" -TimeoutSec 2700
-    
-        # Clear logon body
         $logonBody = ""
-    }
-    catch
-    {
+    } catch {
         Throw $(New-Object System.Exception ("Get-LogonHeader: $($_.ErrorDetails.Message)"))
     }
-    
-    $logonHeader = $null
-    If ([string]::IsNullOrEmpty($logonToken))
-    {
-        Throw "Get-LogonHeader: Logon Token is Empty - Cannot login"
-    }
-    
-    # Create a Logon Token Header (This will be used through out all the script)
-    # ---------------------------
-    If ($logonToken.PSObject.Properties.Name -contains "CyberArkLogonResult")
-    {
-        $logonHeader = @{Authorization = $($logonToken.CyberArkLogonResult) }
-    }
-    else
-    {
-        $logonHeader = @{Authorization = $logonToken }
-    }
-    return $logonHeader
+    if ([string]::IsNullOrEmpty($logonToken)) { Throw "Get-LogonHeader: Logon Token is Empty - Cannot login" }
+    if ($logonToken.PSObject.Properties.Name -contains "CyberArkLogonResult") { @{Authorization = $($logonToken.CyberArkLogonResult) } } else { @{Authorization = $logonToken } }
 }
-    
-# @FUNCTION@ ======================================================================================================================
-# Name...........: Invoke-Logon
-# Description....: Logon to PVWA
-# Parameters.....: None
-# Return Values..: 
-# =================================================================================================================================
+
 Function Invoke-Logon
 { 
-    # Get Credentials to Login
-    try
-    {
-        # Ignore SSL Cert issues
+    try {
         IgnoreCertErrors
-        # Login to PVWA
         Write-LogMessage -type Info -MSG "START Logging in to PVWA."  
         $script:s_pvwaLogonHeader = Get-LogonHeader -Credentials $Credentials
         if ($s_pvwaLogonHeader.Keys -contains "Authorization") { Write-LogMessage -type Info -MSG "FINISH Logging in to PVWA." }
-    }
-    catch
-    {
+    } catch {
         Throw $(New-Object System.Exception ("Error logging on to PVWA", $_.Exception))
     }
 }
 
-
-# @FUNCTION@ ======================================================================================================================
-# Name...........: Invoke-Logoff
-# Description....: Logoff PVWA
-# Parameters.....: None
-# Return Values..: 
-# =================================================================================================================================
 Function Invoke-Logoff
 {
-    try
-    {
+    try {
         Write-LogMessage -type Info -Msg "Logoff Session..."
         Invoke-RestMethod -Method Post -Uri $URL_PVWALogoff -Headers $s_pvwaLogonHeader -ContentType "application/json" | Out-Null
-    }
-    catch
-    {
+    } catch {
         Throw $(New-Object System.Exception ("Error logging off from PVWA", $_.Exception))
     }
 }
@@ -393,13 +246,7 @@ Function Invoke-Logoff
 Function Set-PVWAURL
 {
     [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $False)]
-        [ValidateSet("cyberark", "ldap")]
-        [string]$AuthType = "cyberark"
-    )
-    
-    # Set the PVWA URLS
+    param ([Parameter(Mandatory = $False)][ValidateSet("cyberark", "ldap")][string]$AuthType = "cyberark")
     $script:URL_PVWA = "https://" + ([System.Uri]$PVWAurl).Host
     $global:subdomain = ([System.Uri]$PVWAurl).Host.Split(".")[0]
     $URL_PVWAPasswordVault = $URL_PVWA + "/passwordVault"
@@ -408,8 +255,6 @@ Function Set-PVWAURL
     $script:URL_PVWALogon = $URL_PVWAAuthentication + "/$AuthType/Logon"
     $script:URL_PVWALogoff = $URL_PVWAAuthentication + "/Logoff"
     Write-LogMessage -type debug -Msg "Logon URL will be: '$URL_PVWALogon'"
-    # URL Methods
-    # -----------
     $script:URL_Users = $URL_PVWAAPI + "/Users"
     $script:URL_Accounts = $URL_PVWAAPI + "/Accounts"
     $script:URL_AccountVerify = $URL_Accounts + "/{0}/Verify"
@@ -417,7 +262,7 @@ Function Set-PVWAURL
     $script:URL_Safes = $URL_PVWAAPI + "/Safes"
     $script:URL_SafeFind = $URL_PVWAPasswordVault + "/WebServices/PIMServices.svc/Safes?query={0}"
     $script:URL_SafeAddMembers = $URL_Safes + "/{0}/Members"
-    $script:URL_SafesUnderPlatform = $URL_PVWAAPI + "/Platforms/{0}/Safes" #TO-DO not sure this is needed
+    $script:URL_SafesUnderPlatform = $URL_PVWAAPI + "/Platforms/{0}/Safes"
     $script:URL_SystemHealthComponent = $URL_PVWAAPI + "/ComponentsMonitoringDetails/{0}"
     $script:URL_UserSetGroup = $URL_UsersGroups + "/{0}/Members"
     $script:URL_UserDelGroup = $URL_UsersGroups + "/{0}/Members/{1}"
@@ -438,23 +283,12 @@ Function Set-PVWAURL
 Function Get-Choice
 {
     [CmdletBinding()]
-    Param
-    (
-        [Parameter(Mandatory = $true, Position = 0)]
-        $Title,
-
-        [Parameter(Mandatory = $true, Position = 1)]
-        [String[]]
-        $Options,
-
-        [Parameter(Position = 2)]
-        $DefaultChoice = -1
+    Param(
+        [Parameter(Mandatory = $true, Position = 0)] $Title,
+        [Parameter(Mandatory = $true, Position = 1)][String[]] $Options,
+        [Parameter(Position = 2)] $DefaultChoice = -1
     )
-    if ($DefaultChoice -ne -1 -and ($DefaultChoice -gt $Options.Count -or $DefaultChoice -lt 1))
-    {
-        Write-Warning "DefaultChoice needs to be a value between 1 and $($Options.Count) or -1 (for none)"
-        exit
-    }
+    if ($DefaultChoice -ne -1 -and ($DefaultChoice -gt $Options.Count -or $DefaultChoice -lt 1)) { Write-Warning "DefaultChoice needs to be a value between 1 and $($Options.Count) or -1 (for none)"; exit }
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -466,7 +300,6 @@ Function Get-Choice
     $form.Text = $Title
     $form.ControlBox = $False
     $form.StartPosition = [Windows.Forms.FormStartPosition]::CenterScreen
-    #calculate width required based on longest option text and form title
     $minFormWidth = 300
     $formHeight = 44
     $minButtonWidth = 100
@@ -480,7 +313,6 @@ Function Get-Choice
     $formWidth = ($formWidth, $minFormWidth, ($buttonWidth * $Options.Count + $spaceWidth) | Measure-Object -Maximum).Maximum
     $form.ClientSize = New-Object System.Drawing.Size($formWidth, $formHeight)
     $index = 0
-    #create the buttons dynamically based on the options
     foreach ($option in $Options)
     {
         Set-Variable "button$index" -Value (New-Object System.Windows.Forms.Button)
@@ -489,23 +321,62 @@ Function Get-Choice
         $temp.UseVisualStyleBackColor = $True
         $temp.Text = $option
         $buttonX = ($index + 1) * $spacing + $index * $buttonWidth
-        $temp.Add_Click({ 
-                $script:result = $this.Text; 
-                $form.Close() 
-            })
+        $temp.Add_Click({ $script:result = $this.Text; $form.Close() })
         $temp.Location = New-Object System.Drawing.Point($buttonX, $buttonY)
         $form.Controls.Add($temp)
         $index++
     }
     $shownString = '$this.Activate();'
-    if ($DefaultChoice -ne -1)
-    {
-        $shownString += '(Get-Variable "button$($DefaultChoice-1)" -ValueOnly).Focus()'
-    }
+    if ($DefaultChoice -ne -1) { $shownString += '(Get-Variable "button$($DefaultChoice-1)" -ValueOnly).Focus()' }
     $shownSB = [ScriptBlock]::Create($shownString)
     $form.Add_Shown($shownSB)
     [void]$form.ShowDialog()
     return $result
+}
+
+# --- New helpers for reliable deletion & verification ---
+
+function Get-GroupMembers {
+    param([Parameter(Mandatory)][string]$GroupId)
+    Invoke-RestMethod -Uri "$($URL_UsersGroups)/$GroupId/" -Method Get -Headers $s_pvwaLogonHeader -ErrorAction Stop
+}
+
+function Test-UserInGroup {
+    param(
+        [Parameter(Mandatory)][string]$GroupId,
+        [Parameter(Mandatory)][string]$Username
+    )
+    $grp = Get-GroupMembers -GroupId $GroupId
+    return ($grp.members | Where-Object { $_.username -eq $Username }).Count -gt 0
+}
+
+function Remove-UserFromGroupByUsername {
+    param(
+        [Parameter(Mandatory)][string]$GroupId,
+        [Parameter(Mandatory)][string]$Username
+    )
+
+    $escapedUser = [uri]::EscapeDataString($Username)
+    $delUri = "$($URL_UsersGroups)/$GroupId/Members/$escapedUser"
+    if ($Username -match '[@\.]') { $delUri += '/' }   # trailing slash rule for '.' / '@'
+
+    try {
+        Invoke-RestMethod -Uri $delUri -Method Delete -Headers $s_pvwaLogonHeader -TimeoutSec 30 -ErrorAction Stop | Out-Null
+        return [pscustomobject]@{ username=$Username; removed=$true; note='DELETE 2xx/204' }
+    }
+    catch {
+        $status = $null
+        try { $status = $_.Exception.Response.StatusCode.value__ } catch {}
+        # Verify current state; 504/50x might still have removed the member server-side
+        Start-Sleep -Milliseconds 250
+        $stillThere = $true
+        try { $stillThere = Test-UserInGroup -GroupId $GroupId -Username $Username } catch { $stillThere = $true }
+        if (-not $stillThere) {
+            return [pscustomobject]@{ username=$Username; removed=$true; note="DELETE HTTP $status; confirmed removed" }
+        } else {
+            return [pscustomobject]@{ username=$Username; removed=$false; note="DELETE HTTP $status; member still present"; error=$_.Exception.Message }
+        }
+    }
 }
 
 # ------------------------------------------------------------
@@ -522,18 +393,15 @@ if (Test-Path $LOG_FILE_PATH) {
 Set-PVWAURL -AuthType cyberark
 Invoke-Logon
 
-
 $getPSMGroup = Invoke-RestMethod -Uri "$($URL_UsersGroups)?filter=groupName eq PSMAppUsers&includeMembers eq true" -Method Get -Headers $s_pvwaLogonHeader -ErrorVariable pvwaERR
-
 write-host "Group ID: $($getPSMGroup.value.id)"
 
 $getPSMGroupMembers = Invoke-RestMethod -Uri "$($URL_UsersGroups)/$($getPSMGroup.value.id)/" -Method Get -Headers $s_pvwaLogonHeader -ErrorVariable pvwaERR
 
-#$getPSMGroupMembers.members
+# Exclude PSMApp_* members
+$filterMembers = $getPSMGroupMembers.members | Where-Object { $_.username -notlike "PSMApp_*" }
 
-$filterMembers = $getPSMGroupMembers.members | Where-Object {$_.username -notlike "PSMApp_*"}
-
-
+# Show table now to keep order
 $filterMembers |
   Sort-Object username |
   Format-Table username, id -AutoSize |
@@ -551,32 +419,22 @@ if (@($filterMembers).Count -gt 0) {
         ([System.Management.Automation.Host.ChoiceDescription[]]@($yes,$no)),
         1 # default = No
     )
+
     if ($choice -eq 0) {
-        $success = 0
-        $fail = @()
-
-        for ($i = 0; $i -lt @($filterMembers).Count; $i++) {
-            $member = @($filterMembers)[$i]
-            Write-Progress -Activity 'Removing users from group' -Status $member.username -PercentComplete (($i / @($filterMembers).Count) * 100)
-                # Fallback: try by username (URL-encoded). Add trailing slash if '.' or '@' present.
-                try {
-                    $escapedUser = [uri]::EscapeDataString($member.username)
-                    $delUri2 = "$($URL_UsersGroups)/$($getPSMGroup.value.id)/Members/$escapedUser"
-                    if ($member.username -match '[@\.]') { $delUri2 += '/' }  # <-- important
-                
-                    Invoke-RestMethod -Uri $delUri2 -Method Delete -Headers $s_pvwaLogonHeader -ErrorAction Stop | Out-Null
-                    Write-LogMessage -type Success -Msg "Removed '$($member.username)' using username fallback."
-                    $success++
-                }
-                catch {
-                    $fail += [pscustomobject]@{ username=$member.username; id=$member.id; error=$_.Exception.Message }
-                    Write-LogMessage -type Error -Msg "Failed to remove '$($member.username)': $($_.Exception.Message)"
-                }
-            }
-
+        $total = @($filterMembers).Count
+        $idx = 0
+        $results = foreach ($member in @($filterMembers)) {
+            $idx++
+            Write-Progress -Activity 'Removing users from group' -Status $member.username -PercentComplete ([int](($idx * 100) / $total))
+            Remove-UserFromGroupByUsername -GroupId $getPSMGroup.value.id -Username $member.username
+        }
         Write-Progress -Activity 'Removing users from group' -Completed
-        Write-Host "Done. Removed $success user(s). Failures: $(@($fail).Count)." -ForegroundColor Yellow
-        if ($fail) { $fail | Format-Table username,id,error -AutoSize | Out-Host }
+
+        $success = @($results | Where-Object { $_.removed }).Count
+        $fail    = @($results | Where-Object { -not $_.removed })
+
+        Write-Host "Done. Removed $success user(s). Failures: $(@($fail).Count)." -ForegroundColor Green
+        if ($fail) { $fail | Format-Table username, note, error -AutoSize | Out-Host }
     }
     else {
         Write-Host 'Deletion canceled.' -ForegroundColor Yellow
