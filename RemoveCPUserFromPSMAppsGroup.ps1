@@ -558,15 +558,6 @@ if (@($filterMembers).Count -gt 0) {
         for ($i = 0; $i -lt @($filterMembers).Count; $i++) {
             $member = @($filterMembers)[$i]
             Write-Progress -Activity 'Removing users from group' -Status $member.username -PercentComplete (($i / @($filterMembers).Count) * 100)
-
-            try {
-                # Preferred: delete by member ID
-                $delUri = [string]::Format($URL_UserDelGroup, $getPSMGroup.value.id, $member.id)  # "{UserGroupId}/Members/{MemberId}"
-                Invoke-RestMethod -Uri $delUri -Method Delete -Headers $s_pvwaLogonHeader -ErrorAction Stop | Out-Null
-                Write-LogMessage -type Success -Msg "Removed '$($member.username)' (id: $($member.id)) from '$($getPSMGroup.value.groupName)'."
-                $success++
-            }
-            catch {
                 # Fallback: try by username (URL-encoded). Add trailing slash if '.' or '@' present.
                 try {
                     $escapedUser = [uri]::EscapeDataString($member.username)
@@ -582,7 +573,6 @@ if (@($filterMembers).Count -gt 0) {
                     Write-LogMessage -type Error -Msg "Failed to remove '$($member.username)': $($_.Exception.Message)"
                 }
             }
-        }
 
         Write-Progress -Activity 'Removing users from group' -Completed
         Write-Host "Done. Removed $success user(s). Failures: $(@($fail).Count)." -ForegroundColor Yellow
@@ -592,6 +582,5 @@ if (@($filterMembers).Count -gt 0) {
         Write-Host 'Deletion canceled.' -ForegroundColor Yellow
     }
 }
-
 
 Invoke-Logoff
